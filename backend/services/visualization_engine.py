@@ -25,6 +25,41 @@ def trend_to_chart(trend: dict, label: str = None) -> dict:
     }
 
 
+def _resolve_to_iso(val: str) -> list[str]:
+    val_clean = str(val).strip().lower()
+    if val_clean == "north":
+        return ["US", "CA", "GL"]
+    elif val_clean == "west":
+        return ["GB", "FR", "DE", "ES", "IT"]
+    elif val_clean == "east":
+        return ["IN", "CN", "JP", "KR"]
+    elif val_clean == "south":
+        return ["ZA", "AU", "BR", "AR"]
+    
+    country_map = {
+        "united states": ["US"], "usa": ["US"], "us": ["US"],
+        "india": ["IN"], "ind": ["IN"], "in": ["IN"],
+        "china": ["CN"], "cn": ["CN"],
+        "united kingdom": ["GB"], "uk": ["GB"], "gb": ["GB"],
+        "germany": ["DE"], "de": ["DE"],
+        "france": ["FR"], "fr": ["FR"],
+        "brazil": ["BR"], "br": ["BR"],
+        "australia": ["AU"], "au": ["AU"],
+        "canada": ["CA"], "ca": ["CA"],
+        "russia": ["RU"], "ru": ["RU"],
+        "japan": ["JP"], "jp": ["JP"],
+        "south africa": ["ZA"], "za": ["ZA"],
+        "italy": ["IT"], "it": ["IT"],
+        "spain": ["ES"], "es": ["ES"],
+    }
+    if val_clean in country_map:
+        return country_map[val_clean]
+    for k, codes in country_map.items():
+        if k in val_clean:
+            return codes
+    return []
+
+
 def comparison_to_chart(comparison: dict, chart_type: str = "bar") -> dict:
     if "error" in comparison:
         return {"error": comparison["error"]}
@@ -32,6 +67,22 @@ def comparison_to_chart(comparison: dict, chart_type: str = "bar") -> dict:
     ds_label = comparison["metric"]
     if comparison.get("filter_val"):
         ds_label = f"{comparison['metric']} ({comparison['filter_val']})"
+    
+    if chart_type == "map":
+        map_data = {}
+        for r in ranking:
+            val = r[comparison["dimension"]]
+            metric_val = r[comparison["metric"]]
+            codes = _resolve_to_iso(val)
+            for code in codes:
+                map_data[code] = metric_val
+        return {
+            "type": "map",
+            "dimension": comparison["dimension"],
+            "metric": comparison["metric"],
+            "map_data": map_data
+        }
+
     return {
         "type": chart_type,
         "labels": [r[comparison["dimension"]] for r in ranking],

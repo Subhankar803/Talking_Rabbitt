@@ -275,3 +275,104 @@ def _resolve_column(df: pd.DataFrame, name: str) -> str | None:
         if name_lower == col.lower() or name_lower in col.lower() or col.lower() in name_lower:
             return col
     return None
+
+
+def analyze_drop_reasons(df: pd.DataFrame, schema: dict, metric: str) -> dict:
+    metric_col = None
+    for col in df.columns:
+        if metric.lower() in col.lower() and schema.get(col) == "numeric":
+            metric_col = col
+            break
+    if not metric_col:
+        numeric_cols = [c for c in df.columns if schema.get(c) == "numeric"]
+        metric_col = numeric_cols[0] if numeric_cols else None
+        
+    date_col = None
+    for col in df.columns:
+        if schema.get(col) == "datetime":
+            date_col = col
+            break
+            
+    if not metric_col or not date_col:
+        return {"error": "Could not perform contribution analysis (missing numeric or date columns)."}
+        
+    df_copy = df.copy()
+    df_copy[date_col] = pd.to_datetime(df_copy[date_col], errors='coerce')
+    df_copy = df_copy.dropna(subset=[date_col, metric_col])
+    
+    if len(df_copy) < 2:
+        return {"error": "Not enough data points to analyze drops."}
+        
+    df_copy['period'] = df_copy[date_col].dt.to_period('M')
+    monthly = df_copy.groupby('period')[metric_col].sum().reset_index()
+    monthly = monthly.sort_values('period')
+    
+    if len(monthly) < 2:
+        return {"error": "Not enough monthly historical periods to perform drop comparison."}
+        
+    monthly['diff'] = monthly[metric_col].diff()
+    monthly['pct_change'] = monthly[metric_col].pct_change() * 100
+    
+    # Find the row with the most negative monthly diff
+    min_idx = monthly['diff'].idxmin()
+    min_row = monthly.loc[min_idx]
+    
+    if min_row['diff'] >= 0:
+        min_row = monthly.iloc[-1]
+        
+    drop_period = min_row['period']
+    prev_period = drop_period - 1
+    
+    df_prev = df_copy[df_copy['period'] == prev_period]
+    df_curr = df_copy[df_copy['period'] == drop_period]
+    
+    if df_prev.empty or df_curr.empty:
+        min_row = monthly.iloc[-1]
+        drop_period = min_row['period']
+        prev_period = drop_period - 1
+        df_prev = df_copy[df_copy['period'] == prev_period]
+        df_curr = df_copy[df_copy['period'] == drop_period]
+        if df_prev.empty or df_curr.empty:
+            return {"error": "Unable to compare consecutive monthly periods."}
+            
+    prev_total = float(df_prev[metric_col].sum())
+    curr_total = float(df_curr[metric_col].sum())
+    total_drop = prev_total - curr_total
+    pct_drop = (total_drop / prev_total) * 100 if prev_total > 0 else 0.0
+    
+    dim_cols = [c for c in df.columns if schema.get(c) == "categorical" and c != date_col]
+    
+    drivers = []
+    for dim in dim_cols:
+        prev_grp = df_prev.groupby(dim)[metric_col].sum()
+        curr_grp = df_curr.groupby(dim)[metric_col].sum()
+        
+        comparison = pd.DataFrame({'prev': prev_grp, 'curr': curr_grp}).fillna(0.0)
+        comparison['drop'] = comparison['prev'] - comparison['curr']
+        comparison = comparison.sort_values('drop', ascending=False)
+        
+        if not comparison.empty and comparison.iloc[0]['drop'] > 0:
+            top_drop_seg = comparison.index[0]
+            top_drop_val = float(comparison.iloc[0]['drop'])
+            top_prev_val = float(comparison.iloc[0]['prev'])
+            seg_pct = (top_drop_val / top_prev_val) * 100 if top_prev_val > 0 else 0.0
+            drivers.append({
+                "dimension": dim,
+                "segment": str(top_drop_seg),
+                "amount": top_drop_val,
+                "pct": seg_pct
+            })
+            
+    drivers = sorted(drivers, key=lambda x: x['amount'], reverse=True)
+    
+    return json_safe({
+        "metric": metric_col,
+        "date_col": date_col,
+        "period": str(drop_period),
+        "prev_period": str(prev_period),
+        "prev_total": prev_total,
+        "curr_total": curr_total,
+        "total_drop": total_drop,
+        "pct_drop": pct_drop,
+        "drivers": drivers
+    })

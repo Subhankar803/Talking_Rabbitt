@@ -87,8 +87,9 @@ Formatting and Style Rules:
 - Do not mention the name of the tools or Python code in your final text answer unless asked. Just present the answers/results.
 
 Dataset Query Rules:
-- To query or analyze data, you must write correct, robust pandas python code using the preloaded dataframe variable 'df'.
 - If the user asks for a plot or chart breakdown (e.g. comparison, trend over time, breakdown), ensure your code evaluates to/returns a pandas Series or DataFrame (e.g., via groupby, value_counts, or resampling). Returning a Series/DataFrame automatically generates a beautiful chart on the UI!
+- If the user explicitly asks for a particular chart format (e.g., a pie chart, doughnut chart, or bar chart), write your query normally (evaluating to a Series or DataFrame representing the breakdown) and the system will handle formatting the output chart in the requested style.
+- If the user asks strategic business questions (such as requesting promotional ideas, marketing offers, competitor advice, or suggestions on how to grow or make their market strong), you should first write a pandas query to analyze segment-level performance (e.g., grouping by categories or regions). Then, construct a detailed strategic recommendation report that refers to specific data insights from your query, proposing promotional bundles, discount codes, or targeted campaigns.
 - Make sure to filter correctly by column values or datetimes as requested by the user. Look closely at the provided dataset columns in the summary.
 """
 
@@ -244,11 +245,40 @@ def _handle_anthropic_chat(df, schema: dict, message: str, dataset_summary: str,
 
 def handle_chat(df, schema: dict, message: str, dataset_summary: str, company_name: str = None) -> dict:
     if use_gemini:
-        return _handle_gemini_chat(df, schema, message, dataset_summary, company_name=company_name)
+        res = _handle_gemini_chat(df, schema, message, dataset_summary, company_name=company_name)
     elif use_openrouter:
-        return _handle_openrouter_chat(df, schema, message, dataset_summary, company_name=company_name)
+        res = _handle_openrouter_chat(df, schema, message, dataset_summary, company_name=company_name)
     else:
-        return _handle_anthropic_chat(df, schema, message, dataset_summary, company_name=company_name)
+        res = _handle_anthropic_chat(df, schema, message, dataset_summary, company_name=company_name)
+
+    # Post-process chart type if user explicitly requested a pie, doughnut, or map chart
+    if res.get("chart_spec"):
+        msg_lower = message.lower()
+        if any(k in msg_lower for k in ["pie chart", "piechart", "pie-chart", " pie "]) or msg_lower.endswith(" pie"):
+            res["chart_spec"]["type"] = "pie"
+        elif any(k in msg_lower for k in ["doughnut chart", "doughnutchart", "doughnut-chart", " doughnut "]) or msg_lower.endswith(" doughnut"):
+            res["chart_spec"]["type"] = "doughnut"
+        elif any(k in msg_lower for k in ["map", "global chart", "world map", "map chart", "geochart"]):
+            if res["chart_spec"].get("type") in ["bar", "pie", "doughnut", "line"]:
+                labels = res["chart_spec"].get("labels", [])
+                dataset_data = res["chart_spec"].get("datasets", [{}])[0].get("data", [])
+                metric_name = res["chart_spec"].get("datasets", [{}])[0].get("label", "Value")
+                
+                map_data = {}
+                for idx, label in enumerate(labels):
+                    val = dataset_data[idx] if idx < len(dataset_data) else 0
+                    codes = ve._resolve_to_iso(label)
+                    for code in codes:
+                        map_data[code] = val
+                        
+                res["chart_spec"] = {
+                    "type": "map",
+                    "dimension": "Region",
+                    "metric": metric_name,
+                    "map_data": map_data
+                }
+
+    return res
 
 
 import pandas as pd
@@ -600,15 +630,18 @@ def _fallback_response(df, schema, message: str, company_name: str = None) -> di
 
     # Resolve metric and dimension
     def find_column(cols, text):
+        stop_words = {"using", "with", "show", "give", "plot", "chart", "make", "find", "list", "get", "view", "display", "metric", "column", "data", "dataset", "table", "file", "please", "me", "our", "my", "pie", "bar", "line", "scatter"}
         # First, try to find a column name that is present in the text (exact or clean)
         for col in cols:
             col_clean = col.lower().replace("_", " ").replace("-", " ")
+            if col_clean in stop_words:
+                continue
             if col_clean in text or col.lower() in text:
                 return col
         # If not found, try to see if any word from the text matches or is part of a column name
         words = [w.strip("?,.!") for w in text.split()]
         for word in words:
-            if len(word) < 3:
+            if len(word) < 3 or word.lower() in stop_words:
                 continue
             for col in cols:
                 col_clean = col.lower().replace("_", " ").replace("-", " ")
@@ -622,7 +655,7 @@ def _fallback_response(df, schema, message: str, company_name: str = None) -> di
             possibilities[col.lower()] = col
         
         for word in words:
-            if len(word) < 3:
+            if len(word) < 3 or word.lower() in stop_words:
                 continue
             matches = difflib.get_close_matches(word, list(possibilities.keys()), n=1, cutoff=0.5)
             if matches:
@@ -631,7 +664,14 @@ def _fallback_response(df, schema, message: str, company_name: str = None) -> di
 
     metric = find_column(numeric_cols, msg)
     if not metric:
-        metric = numeric_cols[0]
+        # Try to find a sensible default business metric instead of numeric_cols[0]
+        for default_m in ["revenue", "sales", "profit", "amount"]:
+            match = next((col for col in numeric_cols if default_m in col.lower()), None)
+            if match:
+                metric = match
+                break
+        if not metric:
+            metric = numeric_cols[0]
 
     dimension = None
     if "country" in msg or "countries" in msg:
@@ -643,7 +683,7 @@ def _fallback_response(df, schema, message: str, company_name: str = None) -> di
         dimension = find_column(dim_cols, msg)
     if not dimension and dim_cols:
         # Prefer categorical over text for default dimension fallback
-        cat_cols = [col for col in dim_cols if schema[col] == "categorical"]
+        cat_cols = [col for col in dim_cols if col in schema and schema[col] == "categorical"]
         dimension = cat_cols[0] if cat_cols else dim_cols[0]
 
     # Extract year if present (e.g., 2024, 2025)
@@ -693,6 +733,79 @@ def _fallback_response(df, schema, message: str, company_name: str = None) -> di
         }
 
     # 2. Determine the query intent
+    # F. Strategic Advisory / Offers / Business Recommendations
+    if any(k in msg for k in ["suggest", "idea", "ideas", "offer", "offers", "strategy", "strategic", "improve", "strong", "growth", "grow", "market", "recommendations", "marketing"]):
+        if dimension:
+            result = ae.compare_dimension(df, schema, dimension, metric)
+            if "error" not in result and len(result.get("ranking", [])) >= 2:
+                ranking = result["ranking"]
+                best_seg = ranking[0][result["dimension"]]
+                best_val = ranking[0][result["metric"]]
+                worst_seg = ranking[-1][result["dimension"]]
+                worst_val = ranking[-1][result["metric"]]
+                
+                import random
+                bundle_ideas = [
+                    f"Pair high-performing products from **{best_seg}** with underperforming items in **{worst_seg}** to raise average basket sizes.",
+                    f"Launch a cross-promotional bundle combining **{best_seg}** best-sellers and **{worst_seg}** inventory at a 10% package discount.",
+                    f"Create a 'Buy One Get One' (BOGO) offer that bundles key items from **{best_seg}** with accessories from **{worst_seg}**."
+                ]
+                discount_ideas = [
+                    f"Introduce a limited-time 15% discount code specifically for customers buying in **{worst_seg}** to stimulate segment-level transaction density.",
+                    f"Offer free shipping for orders exceeding $50 in the **{worst_seg}** segment to remove checkout friction.",
+                    f"Run a weekend flash sale with targeted discounts on underperforming lines in **{worst_seg}**."
+                ]
+                retention_ideas = [
+                    f"Target past purchasers in **{worst_seg}** whose transaction counts have dropped recently with targeted email coupons.",
+                    f"Send a re-engagement newsletter to customers in the **{worst_seg}** region offering loyalty points multipliers.",
+                    f"Conduct customer satisfaction surveys in **{worst_seg}** to identify if service issues triggered the drop."
+                ]
+                general_ideas = [
+                    f"Recover sales in **{worst_seg}**: Sales in this segment are currently lowest at **{worst_val:,.2f}** compared to **{best_val:,.2f}** in **{best_seg}**. Check for shipping delays or competitor pricing updates.",
+                    f"Evaluate pricing & competitor pressure: Check if competitor promotions or pricing updates contributed to the segment drops.",
+                    f"Cross-Selling Program: Recommend related products during checkout to increase order volumes across all regions.",
+                    f"Optimize ad spend: Allocate budget from lower performing dimensions into the top-converting segments like **{best_seg}**."
+                ]
+                
+                s1 = random.choice(bundle_ideas)
+                s2 = random.choice(discount_ideas)
+                s3 = random.choice(retention_ideas)
+                s4 = random.choice(general_ideas)
+                
+                answer = (
+                    f"### Strategic Growth & Market Recommendations\n\n"
+                    f"Based on our segment analysis of **{metric}** across **{dimension}**, here are targeted strategies to strengthen your market position:\n\n"
+                    f"#### 1. Targeted Promotions & Promotional Bundles\n"
+                    f"- **Product Bundle**: {s1}\n"
+                    f"- **Discount Offer**: {s2}\n\n"
+                    f"#### 2. Segment-Specific Interventions\n"
+                    f"- **Focus on {worst_seg}**: {s4}\n"
+                    f"- **Leverage {best_seg}**: Double down on successful advertising channels in **{best_seg}** to capture and retain maximum market share.\n\n"
+                    f"#### 3. Strategic Loyalty Offers\n"
+                    f"- **Customer Retention**: {s3}\n"
+                    f"- **Cross-Selling Program**: Recommend related products during checkout to increase average order size across all regions."
+                )
+                chart_spec = ve.comparison_to_chart(result, chart_type="bar")
+                return {
+                    "answer": answer,
+                    "chart_spec": chart_spec,
+                    "tools_used": ["compare_dimension"]
+                }
+                
+        comp_name = company_name or "our company"
+        answer = (
+            f"### General Market Strategy for **{comp_name}**\n\n"
+            f"To strengthen overall market positioning and boost **{metric}**:\n\n"
+            f"1. **Customer Acquisition Offers**: Propose a new-user discount (e.g., 10% off first purchase) to drive customer sign-ups.\n"
+            f"2. **Seasonal Bundling**: Package related products together to raise average order values.\n"
+            f"3. **Feedback Optimization**: Gather reviews and customer input to locate buying friction and improve retention."
+        )
+        return {
+            "answer": answer,
+            "chart_spec": None,
+            "tools_used": []
+        }
+
     # A. Forecast
     if any(k in msg for k in ["forecast", "predict", "projection", "future", "horizon", "next"]):
         args = {"metric": metric}
@@ -719,7 +832,62 @@ def _fallback_response(df, schema, message: str, company_name: str = None) -> di
         }
 
     # B. Anomalies
-    elif any(k in msg for k in ["anomaly", "anomalies", "outlier", "outliers", "unusual", "spike", "spikes", "drop", "drops", "dip", "dips"]):
+    elif any(k in msg for k in ["anomaly", "anomalies", "outlier", "outliers", "unusual", "spike", "spikes", "drop", "drops", "dip", "dips", "why", "decrease", "decline", "reason"]):
+        # Check if the user is asking to explain a drop/reason
+        if any(k in msg for k in ["why", "reason", "cause", "drop", "decrease", "decline"]):
+            analysis = ae.analyze_drop_reasons(df, schema, metric)
+            if "error" not in analysis:
+                metric_name = analysis["metric"]
+                period = analysis["period"]
+                prev_period = analysis["prev_period"]
+                total_drop = analysis["total_drop"]
+                pct_drop = analysis["pct_drop"]
+                
+                drivers_text = []
+                for d in analysis["drivers"][:3]:
+                    drivers_text.append(
+                        f"- **{d['dimension']} ({d['segment']})**: dropped by **{d['amount']:,.2f}** (a **{d['pct']:.1f}%** drop in this segment)."
+                    )
+                drivers_str = "\n".join(drivers_text) if drivers_text else "- No specific segment declines could be isolated."
+                
+                primary_dim = analysis["drivers"][0]["dimension"] if analysis["drivers"] else "key categories"
+                primary_seg = analysis["drivers"][0]["segment"] if analysis["drivers"] else "low-performing areas"
+                
+                answer = (
+                    f"### Analysis of **{metric_name}** Drop ({period} vs {prev_period})\n\n"
+                    f"Our local diagnostics indicate that **{metric_name}** dropped by **{total_drop:,.2f}** (**{pct_drop:.1f}%** decrease) "
+                    f"from **{analysis['prev_total']:,.2f}** in {prev_period} down to **{analysis['curr_total']:,.2f}** in {period}.\n\n"
+                    f"#### Key Drivers of the Decline:\n{drivers_str}\n\n"
+                    f"#### Strategic Recommendations:\n"
+                    f"1. **Recover sales in {primary_seg} ({primary_dim})**: The segment witnessed the largest drop in absolute volume. Check for shipping delays, customer retention issues, or promotional expiration in this region.\n"
+                    f"2. **Conduct client outreach**: Run a targeted promotion or outreach campaign to re-engage customers who reduced purchasing frequency during this period.\n"
+                    f"3. **Evaluate pricing & competitor pressure**: Check if competitor promotions or pricing updates contributed to the segment drops."
+                )
+                
+                try:
+                    df_copy = df.copy()
+                    df_copy[analysis["date_col"]] = pd.to_datetime(df_copy[analysis["date_col"]])
+                    df_copy['period'] = df_copy[analysis["date_col"]].dt.to_period('M').astype(str)
+                    monthly_sum = df_copy.groupby('period')[metric_name].sum().reset_index()
+                    monthly_sum = monthly_sum.sort_values('period')
+                    
+                    chart_spec = {
+                        "type": "line",
+                        "labels": monthly_sum['period'].tolist(),
+                        "datasets": [{
+                            "label": metric_name,
+                            "data": monthly_sum[metric_name].tolist()
+                        }]
+                    }
+                except Exception:
+                    chart_spec = None
+                    
+                return {
+                    "answer": answer,
+                    "chart_spec": chart_spec,
+                    "tools_used": ["detect_anomalies"]
+                }
+
         args = {"metric": metric, "year": year}
         if filter_col and filter_val:
             args["filter_col"] = filter_col
@@ -846,13 +1014,15 @@ def _fallback_response(df, schema, message: str, company_name: str = None) -> di
             }
 
     # D. Compare/Distribution/Breakdown
-    elif any(k in msg for k in ["compare", "comparison", "breakdown", "share", "proportion", "distribution", "by", "versus", "vs"]):
+    elif any(k in msg for k in ["compare", "comparison", "breakdown", "share", "proportion", "distribution", "by", "versus", "vs", "pie", "piechart", "pie-chart", "doughnut", "map", "global", "world", "country", "countries"]):
         if not dimension:
             return {"answer": "### Comparison Warning\n\n- **Missing Dimension**: To compare data, a categorical column is required but none was found.", "chart_spec": None, "tools_used": []}
         
         # User specified or auto-selected Chart.js type based on text
-        if any(k in msg for k in ["pie", "doughnut", "share", "proportion", "breakdown", "distribution"]):
+        if any(k in msg for k in ["pie", "piechart", "pie-chart", "doughnut", "share", "proportion", "breakdown", "distribution"]):
             chart_type = "pie"
+        elif any(k in msg for k in ["map", "global", "world", "country", "countries", "geochart"]):
+            chart_type = "map"
         else:
             chart_type = "bar"
             

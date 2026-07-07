@@ -16,6 +16,45 @@ function renderChart(canvasId, spec, opts = {}) {
     return null;
   }
 
+  // Clear previous vector map containers
+  const container = canvas.parentNode;
+  const oldMap = container.querySelector(".js-vector-map-container");
+  if (oldMap) oldMap.remove();
+
+  if (spec.type === "map") {
+    canvas.style.display = "none";
+    const mapDiv = document.createElement("div");
+    mapDiv.className = "js-vector-map-container";
+    mapDiv.style.width = "100%";
+    mapDiv.style.height = "260px";
+    mapDiv.style.marginTop = "10px";
+    mapDiv.style.position = "relative";
+    container.insertBefore(mapDiv, canvas);
+
+    try {
+      new jsVectorMap({
+        selector: mapDiv,
+        map: "world",
+        backgroundColor: "transparent",
+        visualizeData: {
+          scale: [cssVar("--border-strong") || '#364259', cssVar("--signal") || '#2BD9A8'],
+          values: spec.map_data || {}
+        },
+        onRegionTooltipShow(event, tooltip, code) {
+          const val = (spec.map_data || {})[code];
+          const formattedVal = val != null ? Number(val).toLocaleString('en-IN') : 'No data';
+          tooltip.text(`<b>${tooltip.text()}</b><br>${spec.metric.replace(/_/g, " ")}: ${formattedVal}`);
+        }
+      });
+    } catch (err) {
+      console.error("jsVectorMap failed:", err);
+      mapDiv.innerHTML = `<div class="empty-state" style="padding:40px 0;"><i class="ti ti-alert-triangle"></i>Failed to render map.</div>`;
+    }
+    return null;
+  }
+
+  canvas.style.display = "block";
+
   const existing = Chart.getChart(canvas);
   if (existing) existing.destroy();
 
