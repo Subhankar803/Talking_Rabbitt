@@ -1,0 +1,3 @@
+unnamed: 0,order_date,product_category,quantity_sold,customer_region,payment_method,total_revenue
+1,2023-01-01,A,1,North,Cash,100
+2,2023-01-02,B,2,South,Credit,200
