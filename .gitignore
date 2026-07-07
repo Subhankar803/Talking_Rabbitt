@@ -1,0 +1,21 @@
+# Environment variables
+.env
+
+# Python cache and bytecode
+__pycache__/
+*.pyc
+
+# Local storage (cached datasets and uploads)
+storage/
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# IDE configurations
+.vscode/
+.idea/
+
+# Database files
+database/*.db

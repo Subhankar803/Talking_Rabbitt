@@ -29,94 +29,67 @@ logger = get_logger(__name__)
 # Determine LLM provider based on settings
 use_gemini = False
 use_openrouter = False
+
+# Gather available API keys
+gemini_key = settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY or settings.ANTHROPIC_API_KEY
+anthropic_key = settings.ANTHROPIC_API_KEY
+openrouter_key = settings.ANTHROPIC_API_KEY
+
 if settings.LLM_MODEL and settings.LLM_MODEL.lower().startswith("gemini"):
     use_gemini = True
-elif settings.ANTHROPIC_API_KEY and (
-    settings.ANTHROPIC_API_KEY.startswith("AQ.") or settings.ANTHROPIC_API_KEY.startswith("AIzaSy")
+elif gemini_key and (
+    gemini_key.startswith("AQ.") or gemini_key.startswith("AIzaSy")
 ):
     use_gemini = True
-elif settings.ANTHROPIC_API_KEY and settings.ANTHROPIC_API_KEY.startswith("sk-or-"):
+elif anthropic_key and anthropic_key.startswith("sk-or-"):
     use_openrouter = True
 
 # Initialize client(s)
 _anthropic_client = None
 _gemini_client = None
 
-if settings.ANTHROPIC_API_KEY:
-    if use_gemini:
-        _gemini_client = genai.Client(api_key=settings.ANTHROPIC_API_KEY)
-    elif not use_openrouter:
-        _anthropic_client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+if use_gemini:
+    if gemini_key:
+        _gemini_client = genai.Client(api_key=gemini_key)
+elif use_openrouter:
+    # OpenRouter calls are handled via HTTP urllib requests
+    pass
+else:
+    if anthropic_key:
+        _anthropic_client = anthropic.Anthropic(api_key=anthropic_key)
 
 TOOLS = [
     {
-        "name": "get_trend",
-        "description": "Get the trend of a numeric metric over time (monthly), including percent change in the latest period.",
-        "input_schema": {
-            "type": "object",
-            "properties": {"metric": {"type": "string", "description": "Column name or business term, e.g. 'sales', 'revenue'"}},
-            "required": ["metric"],
-        },
-    },
-    {
-        "name": "detect_anomalies",
-        "description": "Detect unusually high or low values (outliers) in a numeric metric.",
-        "input_schema": {
-            "type": "object",
-            "properties": {"metric": {"type": "string"}},
-            "required": ["metric"],
-        },
-    },
-    {
-        "name": "compare_dimension",
-        "description": "Compare a metric across a categorical dimension (e.g. region, product, campaign) and rank the results.",
+        "name": "query_dataset",
+        "description": "Execute a Python pandas expression or code block against the pre-loaded dataframe 'df' to query, aggregate, filter, or analyze the dataset. The code should return the final result. Pandas is already imported as 'pd'.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "dimension": {"type": "string", "description": "e.g. 'region', 'product', 'campaign'"},
-                "metric": {"type": "string"},
+                "code": {
+                    "type": "string",
+                    "description": "The python pandas code to run, e.g. `df.groupby('Region')['Revenue'].sum()` or `df[df['Category']=='Toys']['Profit'].mean()`. Must be valid Python code."
+                }
             },
-            "required": ["dimension", "metric"],
-        },
-    },
-    {
-        "name": "top_bottom_performers",
-        "description": "Get the top N and bottom N performers of a dimension ranked by a metric.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "dimension": {"type": "string"},
-                "metric": {"type": "string"},
-                "n": {"type": "integer", "default": 5},
-            },
-            "required": ["dimension", "metric"],
-        },
-    },
-    {
-        "name": "forecast_metric",
-        "description": "Forecast future values of a metric for the next N periods using linear regression on historical trend.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "metric": {"type": "string"},
-                "horizon_periods": {"type": "integer", "default": 6},
-            },
-            "required": ["metric"],
-        },
-    },
+            "required": ["code"]
+        }
+    }
 ]
 
 _SYSTEM_PROMPT = """You are the analytics brain inside Talking Rabbitt, an AI-powered business \
 biomedical and intelligence dashboard. You answer executive questions about the user's uploaded dataset by \
-calling the provided tools to fetch real numbers — never invent figures.
+writing custom pandas python code and executing it using the 'query_dataset' tool to query, filter, aggregate, \
+or analyze the loaded dataframe 'df'.
 
-Rules:
-- Always call at least one tool before answering a data question.
-- If a tool returns an "error" field, explain the limitation plainly instead of guessing.
-- Give a detailed, comprehensive, and thoroughly explained ("big") answer that addresses all aspects of the user's question, including clear descriptions of what the tools returned. Do NOT keep your answers concise.
-- Use markdown formatting (headings like '###', bold text '**', bullet points, or numbered lists) to make the response highly professional, readable, and structured.
-- You should ALWAYS call the most appropriate tool to fetch the necessary details. Calling a tool will automatically render a chart (trend, bar chart, scatter plot, or forecast) in the user's interface. Ensure you select the right tool so the user gets both a detailed answer and a visual chart.
-- When numbers support your answer, cite them directly (percentages, totals, rankings).
+Formatting and Style Rules:
+- You MUST give a concise, direct, point-by-point (using bullet points or numbered lists) answer that directly addresses the user's question based on the code execution results.
+- Do NOT provide long introductory text, conversational filler, summaries, or any extra text. Keep it strictly focused and direct.
+- Use markdown formatting (bold text '**', bullet points, or numbered lists) to structure your response.
+- Do not mention the name of the tools or Python code in your final text answer unless asked. Just present the answers/results.
+
+Dataset Query Rules:
+- To query or analyze data, you must write correct, robust pandas python code using the preloaded dataframe variable 'df'.
+- If the user asks for a plot or chart breakdown (e.g. comparison, trend over time, breakdown), ensure your code evaluates to/returns a pandas Series or DataFrame (e.g., via groupby, value_counts, or resampling). Returning a Series/DataFrame automatically generates a beautiful chart on the UI!
+- Make sure to filter correctly by column values or datetimes as requested by the user. Look closely at the provided dataset columns in the summary.
 """
 
 
@@ -135,151 +108,296 @@ def _uppercase_types(d):
         return d
 
 
-def _handle_gemini_chat(df, schema: dict, message: str, dataset_summary: str) -> dict:
+def _handle_gemini_chat(df, schema: dict, message: str, dataset_summary: str, company_name: str = None) -> dict:
     if _gemini_client is None:
-        return _fallback_response(df, schema, message)
+        return _fallback_response(df, schema, message, company_name=company_name)
 
-    gemini_tools = []
-    for tool in TOOLS:
-        # Convert schema types to uppercase for Gemini
-        schema_def = _uppercase_types(tool["input_schema"])
-        f_decl = types.FunctionDeclaration(
-            name=tool["name"],
-            description=tool["description"],
-            parameters_json_schema=schema_def
-        )
-        gemini_tools.append(f_decl)
-
-    tool_config = types.Tool(function_declarations=gemini_tools)
-
-    contents = [
-        types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=f"Dataset context:\n{dataset_summary}\n\nQuestion: {message}")]
-        )
-    ]
-
-    tools_used = []
-    chart_spec = None
-    final_text = ""
-
-    for _ in range(4):
-        response = _gemini_client.models.generate_content(
-            model=settings.LLM_MODEL,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=_SYSTEM_PROMPT,
-                tools=[tool_config],
-                temperature=0.0,
+    try:
+        gemini_tools = []
+        for tool in TOOLS:
+            # Convert schema types to uppercase for Gemini
+            schema_def = _uppercase_types(tool["input_schema"])
+            f_decl = types.FunctionDeclaration(
+                name=tool["name"],
+                description=tool["description"],
+                parameters_json_schema=schema_def
             )
-        )
+            gemini_tools.append(f_decl)
 
-        if response.function_calls:
-            # Append model's call turn
-            contents.append(response.candidates[0].content)
+        tool_config = types.Tool(function_declarations=gemini_tools)
 
-            response_parts = []
-            for call in response.function_calls:
+        company_context = f"\nUser Company Name: {company_name}\n" if company_name else ""
+        contents = [
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=f"Dataset context:\n{dataset_summary}{company_context}\nQuestion: {message}")]
+            )
+        ]
+
+        tools_used = []
+        chart_spec = None
+        final_text = ""
+
+        for _ in range(4):
+            response = _gemini_client.models.generate_content(
+                model=settings.LLM_MODEL.lower(),
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=_SYSTEM_PROMPT,
+                    tools=[tool_config],
+                    temperature=0.0,
+                )
+            )
+
+            if response.function_calls:
+                # Append model's call turn
+                contents.append(response.candidates[0].content)
+
+                response_parts = []
+                for call in response.function_calls:
+                    tools_used.append(call.name)
+                    # execute function
+                    result = _execute_tool(df, schema, call.name, call.args)
+                    if chart_spec is None:
+                        chart_spec = _maybe_chart(call.name, result)
+                    
+                    part = types.Part.from_function_response(
+                        name=call.name,
+                        response={"result": result}
+                    )
+                    response_parts.append(part)
+
+                # Append function responses with role="tool"
+                contents.append(types.Content(role="tool", parts=response_parts))
+            else:
+                if response.text:
+                    final_text = response.text
+                break
+
+        return {
+            "answer": final_text or "I wasn't able to generate an answer from the available data.",
+            "chart_spec": chart_spec,
+            "tools_used": list(set(tools_used)),
+        }
+    except Exception as e:
+        logger.warning(f"Gemini API call failed: {e}. Falling back to local analytics.")
+        return _fallback_response(df, schema, message, company_name=company_name)
+
+
+def _handle_anthropic_chat(df, schema: dict, message: str, dataset_summary: str, company_name: str = None) -> dict:
+    if _anthropic_client is None:
+        return _fallback_response(df, schema, message, company_name=company_name)
+
+    try:
+        tools_used = []
+        company_context = f"\nUser Company Name: {company_name}\n" if company_name else ""
+        messages = [{
+            "role": "user",
+            "content": f"Dataset context:\n{dataset_summary}{company_context}\nQuestion: {message}",
+        }]
+
+        chart_spec = None
+        final_text = ""
+
+        for _ in range(4):  # cap tool-use loops to avoid runaway calls
+            response = _anthropic_client.messages.create(
+                model=settings.LLM_MODEL,
+                max_tokens=1000,
+                system=_SYSTEM_PROMPT,
+                tools=TOOLS,
+                messages=messages,
+            )
+
+            tool_calls = [b for b in response.content if b.type == "tool_use"]
+            text_blocks = [b.text for b in response.content if b.type == "text"]
+            final_text = " ".join(text_blocks) or final_text
+
+            if not tool_calls:
+                break
+
+            messages.append({"role": "assistant", "content": response.content})
+            tool_results = []
+            for call in tool_calls:
                 tools_used.append(call.name)
-                # execute function
-                result = _execute_tool(df, schema, call.name, call.args)
+                result = _execute_tool(df, schema, call.name, call.input)
                 if chart_spec is None:
                     chart_spec = _maybe_chart(call.name, result)
-                
-                part = types.Part.from_function_response(
-                    name=call.name,
-                    response={"result": result}
-                )
-                response_parts.append(part)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": call.id,
+                    "content": json.dumps(result),
+                })
+            messages.append({"role": "user", "content": tool_results})
 
-            # Append function responses with role="tool"
-            contents.append(types.Content(role="tool", parts=response_parts))
-        else:
-            if response.text:
-                final_text = response.text
-            break
+            if response.stop_reason != "tool_use":
+                break
 
-    return {
-        "answer": final_text or "I wasn't able to generate an answer from the available data.",
-        "chart_spec": chart_spec,
-        "tools_used": list(set(tools_used)),
-    }
-
-
-def _handle_anthropic_chat(df, schema: dict, message: str, dataset_summary: str) -> dict:
-    if _anthropic_client is None:
-        return _fallback_response(df, schema, message)
-
-    tools_used = []
-    messages = [{
-        "role": "user",
-        "content": f"Dataset context:\n{dataset_summary}\n\nQuestion: {message}",
-    }]
-
-    chart_spec = None
-    final_text = ""
-
-    for _ in range(4):  # cap tool-use loops to avoid runaway calls
-        response = _anthropic_client.messages.create(
-            model=settings.LLM_MODEL,
-            max_tokens=1000,
-            system=_SYSTEM_PROMPT,
-            tools=TOOLS,
-            messages=messages,
-        )
-
-        tool_calls = [b for b in response.content if b.type == "tool_use"]
-        text_blocks = [b.text for b in response.content if b.type == "text"]
-        final_text = " ".join(text_blocks) or final_text
-
-        if not tool_calls:
-            break
-
-        messages.append({"role": "assistant", "content": response.content})
-        tool_results = []
-        for call in tool_calls:
-            tools_used.append(call.name)
-            result = _execute_tool(df, schema, call.name, call.input)
-            if chart_spec is None:
-                chart_spec = _maybe_chart(call.name, result)
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": call.id,
-                "content": json.dumps(result),
-            })
-        messages.append({"role": "user", "content": tool_results})
-
-        if response.stop_reason != "tool_use":
-            break
-
-    return {
-        "answer": final_text or "I wasn't able to generate an answer from the available data.",
-        "chart_spec": chart_spec,
-        "tools_used": list(set(tools_used)),
-    }
+        return {
+            "answer": final_text or "I wasn't able to generate an answer from the available data.",
+            "chart_spec": chart_spec,
+            "tools_used": list(set(tools_used)),
+        }
+    except Exception as e:
+        logger.warning(f"Anthropic API call failed: {e}. Falling back to local analytics.")
+        return _fallback_response(df, schema, message, company_name=company_name)
 
 
-def handle_chat(df, schema: dict, message: str, dataset_summary: str) -> dict:
+def handle_chat(df, schema: dict, message: str, dataset_summary: str, company_name: str = None) -> dict:
     if use_gemini:
-        return _handle_gemini_chat(df, schema, message, dataset_summary)
+        return _handle_gemini_chat(df, schema, message, dataset_summary, company_name=company_name)
     elif use_openrouter:
-        return _handle_openrouter_chat(df, schema, message, dataset_summary)
+        return _handle_openrouter_chat(df, schema, message, dataset_summary, company_name=company_name)
     else:
-        return _handle_anthropic_chat(df, schema, message, dataset_summary)
+        return _handle_anthropic_chat(df, schema, message, dataset_summary, company_name=company_name)
+
+
+import pandas as pd
+import numpy as np
+
+
+def _pandas_to_chart(val) -> dict | None:
+    try:
+        if isinstance(val, pd.Series):
+            labels = [str(x) for x in val.index]
+            data = [float(x) for x in val.values]
+            chart_type = "bar"
+            if len(labels) > 0:
+                import re
+                if any(re.match(r"\b\d{4}[-/]\d{2}\b", l) for l in labels[:3]):
+                    chart_type = "line"
+            return {
+                "type": chart_type,
+                "labels": labels,
+                "datasets": [{
+                    "label": str(val.name or "Value"),
+                    "data": data
+                }]
+            }
+        elif isinstance(val, pd.DataFrame):
+            if val.empty:
+                return None
+            labels = [str(x) for x in val.index]
+            datasets = []
+            for col in val.columns:
+                if pd.api.types.is_numeric_dtype(val[col]):
+                    datasets.append({
+                        "label": str(col),
+                        "data": [float(x) for x in val[col].values]
+                    })
+            if datasets:
+                chart_type = "bar"
+                if len(labels) > 0:
+                    import re
+                    if any(re.match(r"\b\d{4}[-/]\d{2}\b", l) for l in labels[:3]):
+                        chart_type = "line"
+                return {
+                    "type": chart_type,
+                    "labels": labels,
+                    "datasets": datasets
+                }
+        return None
+    except Exception:
+        return None
+
+
+def query_dataset(df: pd.DataFrame, schema: dict, code: str) -> dict:
+    try:
+        code = code.strip()
+        if code.startswith("```python"):
+            code = code[9:]
+        if code.endswith("```"):
+            code = code[:-3]
+        code = code.strip()
+
+        local_vars = {"df": df, "pd": pd, "np": np}
+        
+        import io
+        import sys
+        old_stdout = sys.stdout
+        redirected_output = io.StringIO()
+        sys.stdout = redirected_output
+        
+        try:
+            is_expression = False
+            try:
+                compiled = compile(code, "<string>", "eval")
+                is_expression = True
+            except SyntaxError:
+                pass
+                
+            if is_expression:
+                result_val = eval(code, {"__builtins__": __builtins__}, local_vars)
+            else:
+                exec(code, {"__builtins__": __builtins__}, local_vars)
+                result_val = redirected_output.getvalue().strip()
+                if not result_val:
+                    if "result" in local_vars:
+                        result_val = local_vars["result"]
+                    elif "output" in local_vars:
+                        result_val = local_vars["output"]
+                    else:
+                        result_val = "Executed successfully."
+        finally:
+            sys.stdout = old_stdout
+            
+        chart_spec = None
+        if isinstance(result_val, (pd.Series, pd.DataFrame)):
+            chart_spec = _pandas_to_chart(result_val)
+            try:
+                result_str = result_val.to_markdown()
+            except Exception:
+                result_str = result_val.to_string()
+        else:
+            result_str = str(result_val)
+            
+        return {
+            "result": result_str,
+            "chart_spec": chart_spec
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 def _execute_tool(df, schema, name, args):
     try:
+        year = args.get("year")
+        if year is not None:
+            try:
+                year = int(year)
+            except (ValueError, TypeError):
+                year = None
+
+        filter_col = args.get("filter_col")
+        filter_val = args.get("filter_val")
+
         if name == "get_trend":
-            return ae.get_trend(df, schema, args["metric"])
+            return ae.get_trend(df, schema, args["metric"], year=year, filter_col=filter_col, filter_val=filter_val)
         if name == "detect_anomalies":
-            return ae.detect_anomalies(df, schema, args["metric"])
+            return ae.detect_anomalies(df, schema, args["metric"], year=year, filter_col=filter_col, filter_val=filter_val)
         if name == "compare_dimension":
-            return ae.compare_dimension(df, schema, args["dimension"], args["metric"])
+            return ae.compare_dimension(
+                df, schema, args["dimension"], args.get("metric"), year=year,
+                chart_type=args.get("chart_type", "bar"), agg=args.get("agg", "sum"),
+                filter_col=filter_col, filter_val=filter_val
+            )
         if name == "top_bottom_performers":
-            return ae.top_bottom_performers(df, schema, args["dimension"], args["metric"], args.get("n", 5))
+            return ae.top_bottom_performers(
+                df, schema, args["dimension"], args.get("metric"), args.get("n", 5), year=year,
+                chart_type=args.get("chart_type", "bar"), agg=args.get("agg", "sum"),
+                filter_col=filter_col, filter_val=filter_val
+            )
         if name == "forecast_metric":
-            return fe.forecast_metric(df, schema, args["metric"], args.get("horizon_periods", 6))
+            return fe.forecast_metric(
+                df, schema, args["metric"], args.get("horizon_periods", 6),
+                filter_col=filter_col, filter_val=filter_val
+            )
+        if name == "get_aggregate":
+            return ae.get_aggregate(
+                df, schema, args["metric"], agg=args.get("agg", "sum"), year=year,
+                filter_col=filter_col, filter_val=filter_val
+            )
+        if name == "query_dataset":
+            return query_dataset(df, schema, args["code"])
         return {"error": f"Unknown tool '{name}'"}
     except Exception as exc:
         logger.exception("Tool execution failed")
@@ -292,7 +410,7 @@ def _maybe_chart(tool_name, result):
     if tool_name == "get_trend":
         return ve.trend_to_chart(result)
     if tool_name == "compare_dimension":
-        return ve.comparison_to_chart(result) if "ranking" in result else None
+        return ve.comparison_to_chart(result, chart_type=result.get("chart_type", "bar")) if "ranking" in result else None
     if tool_name == "top_bottom_performers":
         # Create a combined comparison dict so comparison_to_chart can parse it
         combined_ranking = []
@@ -313,189 +431,285 @@ def _maybe_chart(tool_name, result):
             "metric": result["metric"],
             "ranking": combined_ranking
         }
-        return ve.comparison_to_chart(fake_result)
+        return ve.comparison_to_chart(fake_result, chart_type=result.get("chart_type", "bar"))
     if tool_name == "detect_anomalies":
         return ve.anomalies_to_chart(
             result["series_values"], result["series_labels"], result["anomaly_indices"]
         )
     if tool_name == "forecast_metric":
+        metric_name = result["metric"]
+        if result.get("filter_val"):
+            metric_name = f"{metric_name} ({result['filter_val']})"
         return ve.forecast_to_chart(
             result["historical_periods"], result["historical_values"],
-            result["forecast_periods"], result["forecast_values"], result["metric"],
+            result["forecast_periods"], result["forecast_values"], metric_name,
         )
+    if tool_name == "get_aggregate":
+        return ve.trend_to_chart(result) if result.get("periods") else None
+    if tool_name == "query_dataset":
+        return result.get("chart_spec")
     return None
 
 
-def _handle_openrouter_chat(df, schema: dict, message: str, dataset_summary: str) -> dict:
+def _handle_openrouter_chat(df, schema: dict, message: str, dataset_summary: str, company_name: str = None) -> dict:
     if not settings.ANTHROPIC_API_KEY:
-        return _fallback_response(df, schema, message)
+        return _fallback_response(df, schema, message, company_name=company_name)
 
-    import urllib.request
-    import urllib.error
-    
-    # Map the tools to OpenAI tool format
-    openai_tools = []
-    for tool in TOOLS:
-        openai_tools.append({
-            "type": "function",
-            "function": {
-                "name": tool["name"],
-                "description": tool["description"],
-                "parameters": tool["input_schema"]
-            }
-        })
-
-    messages = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": f"Dataset context:\n{dataset_summary}\n\nQuestion: {message}"}
-    ]
-
-    tools_used = []
-    chart_spec = None
-    final_text = ""
-
-    headers = {
-        "Authorization": f"Bearer {settings.ANTHROPIC_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:8000",
-        "X-Title": "Talking Rabbitt"
-    }
-
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    model = settings.LLM_MODEL
-    if model == "openrouter/free" or not model:
-        model = "meta-llama/llama-3-8b-instruct:free"
-
-    for _ in range(4):  # cap tool-use loops to avoid runaway calls
-        data = {
-            "model": model,
-            "messages": messages,
-            "tools": openai_tools,
-            "temperature": 0.0
-        }
+    try:
+        import urllib.request
+        import urllib.error
         
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(data).encode("utf-8"),
-            headers=headers,
-            method="POST"
-        )
-        
-        try:
-            with urllib.request.urlopen(req, timeout=30) as response:
-                res_body = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            err_msg = e.read().decode("utf-8")
-            logger.error(f"OpenRouter HTTP Error: {err_msg}")
-            # Fall back to local parsing if LLM fails due to API key issues
-            return _fallback_response(df, schema, message)
-        except Exception as e:
-            logger.error(f"OpenRouter Connection Error: {e}")
-            return _fallback_response(df, schema, message)
-
-        choices = res_body.get("choices", [])
-        if not choices:
-            break
-        choice = choices[0]
-        msg_obj = choice.get("message", {})
-        
-        if msg_obj.get("content"):
-            final_text = msg_obj["content"]
-            
-        tool_calls = msg_obj.get("tool_calls", [])
-        if not tool_calls:
-            break
-            
-        # Append assistant's response with tool calls to messages
-        # Remove None values and map keys appropriately
-        assistant_msg = {
-            "role": "assistant",
-            "content": msg_obj.get("content"),
-            "tool_calls": tool_calls
-        }
-        messages.append(assistant_msg)
-        
-        for call in tool_calls:
-            func = call.get("function", {})
-            name = func.get("name")
-            call_id = call.get("id")
-            
-            try:
-                args = json.loads(func.get("arguments", "{}"))
-            except Exception:
-                args = {}
-                
-            tools_used.append(name)
-            result = _execute_tool(df, schema, name, args)
-            
-            if chart_spec is None:
-                chart_spec = _maybe_chart(name, result)
-                
-            messages.append({
-                "role": "tool",
-                "tool_call_id": call_id,
-                "name": name,
-                "content": json.dumps(result)
+        # Map the tools to OpenAI tool format
+        openai_tools = []
+        for tool in TOOLS:
+            openai_tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "parameters": tool["input_schema"]
+                }
             })
 
-    return {
-        "answer": final_text or "I wasn't able to generate an answer from the available data.",
-        "chart_spec": chart_spec,
-        "tools_used": list(set(tools_used)),
-    }
+        company_context = f"\nUser Company Name: {company_name}\n" if company_name else ""
+        messages = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": f"Dataset context:\n{dataset_summary}{company_context}\nQuestion: {message}"}
+        ]
+
+        tools_used = []
+        chart_spec = None
+        final_text = ""
+
+        headers = {
+            "Authorization": f"Bearer {settings.ANTHROPIC_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "http://localhost:8000",
+            "X-Title": "Talking Rabbitt"
+        }
+
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        model = settings.LLM_MODEL
+        if model == "openrouter/free" or not model:
+            model = "meta-llama/llama-3-8b-instruct:free"
+
+        for _ in range(4):  # cap tool-use loops to avoid runaway calls
+            data = {
+                "model": model,
+                "messages": messages,
+                "tools": openai_tools,
+                "temperature": 0.0
+            }
+            
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(data).encode("utf-8"),
+                headers=headers,
+                method="POST"
+            )
+            
+            try:
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    res_body = json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                err_msg = e.read().decode("utf-8")
+                logger.error(f"OpenRouter HTTP Error: {err_msg}")
+                # Fall back to local parsing if LLM fails due to API key issues
+                return _fallback_response(df, schema, message, company_name=company_name)
+            except Exception as e:
+                logger.error(f"OpenRouter Connection Error: {e}")
+                return _fallback_response(df, schema, message, company_name=company_name)
+
+            choices = res_body.get("choices", [])
+            if not choices:
+                break
+            choice = choices[0]
+            msg_obj = choice.get("message", {})
+            
+            if msg_obj.get("content"):
+                final_text = msg_obj["content"]
+                
+            tool_calls = msg_obj.get("tool_calls", [])
+            if not tool_calls:
+                break
+                
+            # Append assistant's response with tool calls to messages
+            # Remove None values and map keys appropriately
+            assistant_msg = {
+                "role": "assistant",
+                "content": msg_obj.get("content"),
+                "tool_calls": tool_calls
+            }
+            messages.append(assistant_msg)
+            
+            for call in tool_calls:
+                func = call.get("function", {})
+                name = func.get("name")
+                call_id = call.get("id")
+                
+                try:
+                    args = json.loads(func.get("arguments", "{}"))
+                except Exception:
+                    args = {}
+                    
+                tools_used.append(name)
+                result = _execute_tool(df, schema, name, args)
+                
+                if chart_spec is None:
+                    chart_spec = _maybe_chart(name, result)
+                    
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": name,
+                    "content": json.dumps(result)
+                })
+
+        return {
+            "answer": final_text or "I wasn't able to generate an answer from the available data.",
+            "chart_spec": chart_spec,
+            "tools_used": list(set(tools_used)),
+        }
+    except Exception as e:
+        logger.warning(f"OpenRouter API call failed: {e}. Falling back to local analytics.")
+        return _fallback_response(df, schema, message, company_name=company_name)
 
 
-def _fallback_response(df, schema, message: str) -> dict:
+def _fallback_response(df, schema, message: str, company_name: str = None) -> dict:
     """A highly dynamic local analytics handler that processes the prompt using Pandas
     when no API key is set. This makes the demo fully functional and responsive locally!"""
     import re
     msg = message.lower().strip()
 
-    # 1. Identify numeric columns and categorical columns
+    # 1. Identify numeric columns and dimension columns (categorical + text columns)
     numeric_cols = [col for col, dtype in schema.items() if dtype == "numeric"]
+    dim_cols = [col for col, dtype in schema.items() if dtype in ["categorical", "text"]]
     categorical_cols = [col for col, dtype in schema.items() if dtype == "categorical"]
+    
+    # If there is a datetime column, add 'year' and 'month' as virtual dimensions
+    date_col = next((col for col, dtype in schema.items() if dtype == "datetime"), None)
+    if date_col:
+        dim_cols.extend(["year", "month"])
     
     if not numeric_cols:
         return {
-            "answer": "### Quantitative Analysis Warning\n\nThis dataset does not contain any numeric columns for quantitative analysis.",
+            "answer": "### Quantitative Analysis Warning\n\n- **No Numeric Data**: This dataset does not contain any numeric columns for quantitative analysis.",
             "chart_spec": None,
             "tools_used": []
         }
 
-    # Helper to find matching column in the text
+    # Resolve metric and dimension
     def find_column(cols, text):
+        # First, try to find a column name that is present in the text (exact or clean)
         for col in cols:
             col_clean = col.lower().replace("_", " ").replace("-", " ")
             if col_clean in text or col.lower() in text:
                 return col
+        # If not found, try to see if any word from the text matches or is part of a column name
+        words = [w.strip("?,.!") for w in text.split()]
+        for word in words:
+            if len(word) < 3:
+                continue
+            for col in cols:
+                col_clean = col.lower().replace("_", " ").replace("-", " ")
+                if word in col_clean or word in col.lower():
+                    return col
+        # If not found, try fuzzy match on each word to handle typos (e.g. "coustomers" -> "customer")
+        import difflib
+        possibilities = {}
+        for col in cols:
+            possibilities[col.lower().replace("_", " ").replace("-", " ")] = col
+            possibilities[col.lower()] = col
+        
+        for word in words:
+            if len(word) < 3:
+                continue
+            matches = difflib.get_close_matches(word, list(possibilities.keys()), n=1, cutoff=0.5)
+            if matches:
+                return possibilities[matches[0]]
         return None
 
-    # Resolve metric and dimension
     metric = find_column(numeric_cols, msg)
     if not metric:
         metric = numeric_cols[0]
 
-    dimension = find_column(categorical_cols, msg)
-    if not dimension and categorical_cols:
-        dimension = categorical_cols[0]
+    dimension = None
+    if "country" in msg or "countries" in msg:
+        for col in dim_cols:
+            if "country" in col.lower() or "region" in col.lower():
+                dimension = col
+                break
+    if not dimension:
+        dimension = find_column(dim_cols, msg)
+    if not dimension and dim_cols:
+        # Prefer categorical over text for default dimension fallback
+        cat_cols = [col for col in dim_cols if schema[col] == "categorical"]
+        dimension = cat_cols[0] if cat_cols else dim_cols[0]
+
+    # Extract year if present (e.g., 2024, 2025)
+    year = None
+    year_match = re.search(r"\b(20\d{2})\b", msg)
+    if year_match:
+        try:
+            year = int(year_match.group(1))
+        except ValueError:
+            pass
+
+    # Extract filter column and value
+    filter_col = None
+    filter_val = None
+    for col in categorical_cols:
+        try:
+            unique_vals = [str(val) for val in df[col].dropna().unique()]
+            for val in unique_vals:
+                val_clean = val.lower().strip()
+                if not val_clean:
+                    continue
+                # Match if value is in message, or starts with, or is part of a word in message
+                if val_clean in msg or any(val_clean in w for w in msg.split()):
+                    filter_col = col
+                    filter_val = val
+                    break
+        except Exception:
+            continue
+        if filter_col:
+            break
+
+    # 0. Rival Company / Competition Check
+    if any(k in msg for k in ["stay tuned", "survive", "competition", "competitor", "competitors", "rival", "rivals"]):
+        comp_name = company_name or "our company"
+        answer = (
+            f"### Market Survival & Competitor Analysis for **{comp_name}**\n\n"
+            f"- **Competitor Landscape**: Direct rivals include large-scale operators (**WidgetCorp**), agile tech providers (**InnovateLLC**), and low-cost manufacturers (**Acme Inc**).\n"
+            f"- **Strategic Survival Recommendations**:\n"
+            f"  - **Product Differentiation**: Focus on high-margin product offerings to avoid price wars.\n"
+            f"  - **Marketing Channels**: Expand campaign outreach across targeted Social and Email campaigns.\n"
+            f"  - **Retention**: Offer loyalty rewards and personalized services to retain key accounts."
+        )
+        return {
+            "answer": answer,
+            "chart_spec": None,
+            "tools_used": []
+        }
 
     # 2. Determine the query intent
     # A. Forecast
     if any(k in msg for k in ["forecast", "predict", "projection", "future", "horizon", "next"]):
-        result = _execute_tool(df, schema, "forecast_metric", {"metric": metric})
+        args = {"metric": metric}
+        if filter_col and filter_val:
+            args["filter_col"] = filter_col
+            args["filter_val"] = filter_val
+        result = _execute_tool(df, schema, "forecast_metric", args)
         if "error" in result:
-            return {"answer": f"### Forecast Analysis Error\n\nError running forecast: {result['error']}", "chart_spec": None, "tools_used": []}
+            return {"answer": f"### Forecast Analysis Error\n\n- **Error**: {result['error']}", "chart_spec": None, "tools_used": []}
         
         latest_val = result["forecast_values"][-1]
         conf = result["confidence"]
+        filter_text = f" for **{filter_val}** ({filter_col})" if filter_val else ""
         answer = (
-            f"### Forecast Analysis for '{metric}'\n\n"
-            f"To project future trends, I conducted a **linear regression forecasting analysis** on the historical timeline for the **'{metric}'** metric over a 6-month horizon.\n\n"
-            f"**Key Forecast Projection:**\n"
-            f"- **Target Horizon Value:** By the end of the 6-month horizon, **'{metric}'** is projected to reach approximately **{latest_val:,.2f}**.\n"
-            f"- **Statistical Model Confidence:** **{conf:.2f}** (higher confidence score indicates a more stable historical trendline supporting the projection).\n\n"
-            f"**Analytical Context:**\n"
-            f"This projection is calculated using ordinary least squares (OLS) linear regression on historical periods. It assumes that current market momentum, demand signals, and operational factors will continue along a similar linear trajectory. If there are external anomalies, seasonal variations, or sudden market shifts, actual figures may vary. The line chart below displays both the historical data series and the projected trend line, allowing you to trace the growth curve visualised across the full timeline."
+            f"### Forecast Analysis for **{metric}**{filter_text}\n\n"
+            f"- **Target Horizon Projection**: Projected to reach approximately **{latest_val:,.2f}** over the next 6 periods.\n"
+            f"- **Model Confidence Score**: **{conf:.2f}** (OLS Linear Regression)."
         )
         chart_spec = _maybe_chart("forecast_metric", result)
         return {
@@ -506,29 +720,28 @@ def _fallback_response(df, schema, message: str) -> dict:
 
     # B. Anomalies
     elif any(k in msg for k in ["anomaly", "anomalies", "outlier", "outliers", "unusual", "spike", "spikes", "drop", "drops", "dip", "dips"]):
-        result = _execute_tool(df, schema, "detect_anomalies", {"metric": metric})
+        args = {"metric": metric, "year": year}
+        if filter_col and filter_val:
+            args["filter_col"] = filter_col
+            args["filter_val"] = filter_val
+        result = _execute_tool(df, schema, "detect_anomalies", args)
         if "error" in result:
-            return {"answer": f"### Anomaly Detection Error\n\nError detecting anomalies: {result['error']}", "chart_spec": None, "tools_used": []}
+            return {"answer": f"### Anomaly Detection Error\n\n- **Error**: {result['error']}", "chart_spec": None, "tools_used": []}
         
         count = result["anomalies_found"]
+        filter_text = f" for **{filter_val}** ({filter_col})" if filter_val else ""
+        year_text = f" in **{year}**" if year else ""
         if count == 0:
             answer = (
-                f"### Anomaly Detection Report for '{metric}'\n\n"
-                f"I performed a rigorous statistical anomaly detection sweep across all data points recorded for **'{metric}'**.\n\n"
-                f"**Findings:**\n"
-                f"- **No Anomalies Detected:** Every data point falls within the normal statistical threshold (specifically, within 2.5 standard deviations from the dataset mean).\n"
-                f"- **Data Stability:** This suggests that **'{metric}'** shows highly consistent behavior over time with no sudden spikes or drops that would indicate data entry errors or extreme external shocks.\n\n"
-                f"Please refer to the chart below to observe the flat or normal variation across the series timeline."
+                f"### Anomaly Detection Report for **{metric}**{filter_text}{year_text}\n\n"
+                f"- **No Anomalies Detected**: All data points are within standard statistical thresholds (2.5 standard deviations)."
             )
         else:
-            details = "\n".join([f"- **Row {a['row_index']}:** Value of **{a['value']:,.2f}**" for a in result["anomalies"][:5]])
+            details = "\n".join([f"  - Row {a['row_index']}: Value of **{a['value']:,.2f}**" for a in result["anomalies"][:5]])
             answer = (
-                f"### Anomaly Detection Report for '{metric}'\n\n"
-                f"I performed a statistical outlier analysis on **'{metric}'** (using a standard threshold of 2.5 standard deviations from the mean) and identified **{count} unusual data point(s)**.\n\n"
-                f"**Detected Anomalies/Outliers:**\n"
-                f"{details}\n\n"
-                f"**Analytical Context:**\n"
-                f"Anomalies of this nature often indicate critical business events, such as seasonal spikes, bulk one-off orders, operational pauses, or potential data entry errors. The scatter plot below highlights these specific anomalies visually in red against the rest of the historical distribution so you can isolate the exact periods where they occurred."
+                f"### Anomaly Detection Report for **{metric}**{filter_text}{year_text}\n\n"
+                f"- **Anomalies Identified**: Found **{count}** statistical outlier(s):\n"
+                f"{details}"
             )
         chart_spec = _maybe_chart("detect_anomalies", result)
         return {
@@ -538,28 +751,38 @@ def _fallback_response(df, schema, message: str) -> dict:
         }
 
     # C. Top/Bottom Performers
-    elif any(k in msg for k in ["top", "best", "worst", "bottom", "highest", "lowest", "performer", "performers", "rank", "ranking", "rankings"]):
+    elif any(k in msg for k in ["top", "best", "worst", "bottom", "highest", "lowest", "most", "least", "performer", "performers", "rank", "ranking", "rankings"]):
         if not dimension:
-            return {"answer": "### Performance Ranking Warning\n\nTo rank performers, I need a categorical column, but none was found in this dataset.", "chart_spec": None, "tools_used": []}
+            return {"answer": "### Performance Ranking Warning\n\n- **Missing Dimension**: To rank performers, a categorical column is required but none was found.", "chart_spec": None, "tools_used": []}
         
-        result = _execute_tool(df, schema, "top_bottom_performers", {"dimension": dimension, "metric": metric})
+        # Extract N from the message if present (e.g. "top 3", "best 5", etc.)
+        n = 5
+        n_match = re.search(r"\b(?:top|bottom|best|worst|first|last|highest|lowest|most|least)\s+(\d+)\b", msg)
+        if n_match:
+            try:
+                n = int(n_match.group(1))
+            except ValueError:
+                pass
+
+        args = {"dimension": dimension, "metric": metric, "year": year, "n": n}
+        if filter_col and filter_val:
+            args["filter_col"] = filter_col
+            args["filter_val"] = filter_val
+        result = _execute_tool(df, schema, "top_bottom_performers", args)
         if "error" in result:
-            return {"answer": f"### Performance Ranking Error\n\nError getting performers: {result['error']}", "chart_spec": None, "tools_used": []}
+            return {"answer": f"### Performance Ranking Error\n\n- **Error**: {result['error']}", "chart_spec": None, "tools_used": []}
         
         top_list = result["top"]
         worst_list = result["bottom"]
-        top_details = "\n".join([f"- **{r[dimension]}:** **{r[metric]:,.2f}**" for r in top_list[:5]])
-        worst_details = "\n".join([f"- **{r[dimension]}:** **{r[metric]:,.2f}**" for r in worst_list[:5]])
+        top_details = "\n".join([f"  - **{r[result['dimension']]}**: **{r[result['metric']]:,.2f}**" for r in top_list])
+        worst_details = "\n".join([f"  - **{r[result['dimension']]}**: **{r[result['metric']]:,.2f}**" for r in worst_list])
+        filter_text = f" for **{filter_val}** ({filter_col})" if filter_val else ""
+        year_text = f" in **{year}**" if year else ""
         
         answer = (
-            f"### Performance Ranking of '{dimension}' by '{metric}'\n\n"
-            f"I have conducted a comparative ranking analysis on the categorical dimension **'{dimension}'** based on the numeric metric **'{metric}'** to identify top performing and underperforming segments.\n\n"
-            f"**Top Performing Segments:**\n"
-            f"{top_details}\n\n"
-            f"**Underperforming Segments:**\n"
-            f"{worst_details}\n\n"
-            f"**Strategic Recommendation:**\n"
-            f"We recommend allocating resource optimizations, budget boosts, or promotional campaigns towards the leading segments to double down on their success. Simultaneously, a root-cause investigation should be initiated for the lower performing segments to determine if localized pricing adjustments, product mix changes, or marketing pivots are necessary. The bar chart below visualizes the performance hierarchy clearly."
+            f"### Performance Ranking of **{dimension}** by **{metric}**{filter_text}{year_text}\n\n"
+            f"- **Top Performers**:\n{top_details}\n"
+            f"- **Underperformers**:\n{worst_details}"
         )
         chart_spec = _maybe_chart("top_bottom_performers", result)
         return {
@@ -567,32 +790,91 @@ def _fallback_response(df, schema, message: str) -> dict:
             "chart_spec": chart_spec,
             "tools_used": ["top_bottom_performers"]
         }
+    # AA. Aggregation (Sum, Average, Total, Count)
+    elif any(k in msg for k in ["sum", "total", "average", "avg", "mean", "collected", "how many", "how much", "earned", "gained"]):
+        # Check if this is actually a comparison breakdown (e.g., "by region", "versus")
+        is_breakdown = any(k in msg for k in ["compare", "comparison", "breakdown", "share", "proportion", "distribution", "by", "versus", "vs"])
+        if not is_breakdown:
+            words_set = set(w.strip("?,.!") for w in msg.split())
+            agg_type = "sum"
+            if any(k in words_set for k in ["average", "avg", "mean"]):
+                agg_type = "mean"
+            elif any(k in words_set for k in ["count", "frequency"]) or "number of" in msg or "how many rows" in msg:
+                agg_type = "count"
+            elif "min" in msg or "lowest value" in msg:
+                agg_type = "min"
+            elif "max" in msg or "highest value" in msg:
+                agg_type = "max"
+
+            args = {"metric": metric, "agg": agg_type, "year": year}
+            if filter_col and filter_val:
+                args["filter_col"] = filter_col
+                args["filter_val"] = filter_val
+
+            result = _execute_tool(df, schema, "get_aggregate", args)
+            if "error" in result:
+                return {"answer": f"### Aggregation Error\n\n- **Error**: {result['error']}", "chart_spec": None, "tools_used": []}
+
+            val = result["value"]
+            filter_text = f" for **{filter_val}** ({filter_col})" if filter_val else ""
+            year_text = f" in **{year}**" if year else ""
+            
+            # Format the output value nicely
+            if agg_type == "count":
+                formatted_val = f"{int(val):,}"
+            else:
+                formatted_val = f"{val:,.2f}"
+
+            agg_names = {
+                "sum": "Total",
+                "mean": "Average",
+                "count": "Count",
+                "min": "Minimum",
+                "max": "Maximum"
+            }
+            
+            answer = (
+                f"### {agg_names[agg_type]} of **{metric}**{filter_text}{year_text}\n\n"
+                f"- **{agg_names[agg_type]} Value**: **{formatted_val}**\n"
+                f"- **Filtered Records Count**: {result['row_count']} row(s)"
+            )
+            chart_spec = _maybe_chart("get_aggregate", result)
+            return {
+                "answer": answer,
+                "chart_spec": chart_spec,
+                "tools_used": ["get_aggregate"]
+            }
 
     # D. Compare/Distribution/Breakdown
     elif any(k in msg for k in ["compare", "comparison", "breakdown", "share", "proportion", "distribution", "by", "versus", "vs"]):
         if not dimension:
-            return {"answer": "### Comparison Warning\n\nTo compare dimensions, I need a categorical column, but none was found in this dataset.", "chart_spec": None, "tools_used": []}
+            return {"answer": "### Comparison Warning\n\n- **Missing Dimension**: To compare data, a categorical column is required but none was found.", "chart_spec": None, "tools_used": []}
         
-        result = _execute_tool(df, schema, "compare_dimension", {"dimension": dimension, "metric": metric})
+        # User specified or auto-selected Chart.js type based on text
+        if any(k in msg for k in ["pie", "doughnut", "share", "proportion", "breakdown", "distribution"]):
+            chart_type = "pie"
+        else:
+            chart_type = "bar"
+            
+        args = {"dimension": dimension, "metric": metric, "chart_type": chart_type, "year": year}
+        if filter_col and filter_val:
+            args["filter_col"] = filter_col
+            args["filter_val"] = filter_val
+        result = _execute_tool(df, schema, "compare_dimension", args)
         if "error" in result:
-            return {"answer": f"### Comparison Error\n\nError comparing dimension: {result['error']}", "chart_spec": None, "tools_used": []}
+            return {"answer": f"### Comparison Error\n\n- **Error**: {result['error']}", "chart_spec": None, "tools_used": []}
         
         best = result["best"]
         worst = result["worst"]
         best_share = best.get('share_pct', 0)
         worst_share = worst.get('share_pct', 0)
+        filter_text = f" for **{filter_val}** ({filter_col})" if filter_val else ""
+        year_text = f" in **{year}**" if year else ""
         answer = (
-            f"### Dimension Comparison & Distribution Analysis\n\n"
-            f"I have analyzed the breakdown and distribution of the metric **'{metric}'** across the different segments of the **'{dimension}'** dimension.\n\n"
-            f"**Key Segment Insights:**\n"
-            f"- **Market Leader:** **'{best[dimension]}'** is the dominant contributor, generating a total of **{best[metric]:,.2f}** which represents **{best_share}%** of the total metric.\n"
-            f"- **Lowest Contributor:** **'{worst[dimension]}'** ranks as the lowest contributor, generating **{worst[metric]:,.2f}**, representing a minor **{worst_share}%** share.\n\n"
-            f"**Distribution Summary:**\n"
-            f"This breakdown showcases a structural concentration. A high market share for the top segment signifies a reliance on that specific area, whereas a more balanced distribution suggests a diversified portfolio. The accompanying chart provides a clear visualization of the market share distribution across all segments."
+            f"### Comparison Analysis of **{metric}** across **{dimension}**{filter_text}{year_text}\n\n"
+            f"- **Dominant Segment**: **{best[result['dimension']]}** (generating **{best[result['metric']]:,.2f}**, representing **{best_share}%** share)\n"
+            f"- **Lowest Segment**: **{worst[result['dimension']]}** (generating **{worst[result['metric']]:,.2f}**, representing **{worst_share}%** share)"
         )
-        
-        # User specified or default type: check if pie is requested
-        chart_type = "pie" if "pie" in msg else "bar"
         chart_spec = ve.comparison_to_chart(result, chart_type=chart_type)
         return {
             "answer": answer,
@@ -602,31 +884,30 @@ def _fallback_response(df, schema, message: str) -> dict:
 
     # E. Trend (Default fallback if nothing else matched)
     else:
-        result = _execute_tool(df, schema, "get_trend", {"metric": metric})
+        args = {"metric": metric, "year": year}
+        if filter_col and filter_val:
+            args["filter_col"] = filter_col
+            args["filter_val"] = filter_val
+        result = _execute_tool(df, schema, "get_trend", args)
         if "error" in result:
-            return {"answer": f"### Trend Analysis Error\n\nI was unable to analyze the trend: {result['error']}", "chart_spec": None, "tools_used": []}
+            return {"answer": f"### Trend Analysis Error\n\n- **Error**: {result['error']}", "chart_spec": None, "tools_used": []}
         
         direction = result["direction"]
         change = result["latest_change_pct"]
+        filter_text = f" for **{filter_val}** ({filter_col})" if filter_val else ""
+        year_text = f" in **{year}**" if year else ""
         if change is not None:
             pct_str = f"changed by {change:+.2f}%"
             answer = (
-                f"### Trend Analysis for '{metric}'\n\n"
-                f"I have analyzed the historical timeline of **'{metric}'** to trace its developmental trajectory over time.\n\n"
-                f"**Trend and Velocity:**\n"
-                f"- **Overall Direction:** The metric has moved in a **{direction}** direction.\n"
-                f"- **Recent Momentum:** In the most recent period, **'{metric}'** **{pct_str}** compared to the prior period.\n\n"
-                f"**Historical Outlook:**\n"
-                f"Tracking this trend line helps identify seasonal patterns or structural shifts in performance. Steady growth indicates stable momentum, while a decline suggests potential bottlenecks or market cooling. The trend graph below maps the entire series timeline to help visualize these shifts."
+                f"### Trend Analysis for **{metric}**{filter_text}{year_text}\n\n"
+                f"- **Overall Direction**: **{direction.capitalize()}** trend\n"
+                f"- **Recent Change**: **{pct_str}** compared to the prior period"
             )
         else:
             answer = (
-                f"### Series Timeline for '{metric}'\n\n"
-                f"I have compiled the full historical series data for **'{metric}'** across the available timeline.\n\n"
-                f"**Observations:**\n"
-                f"- **Data Distribution:** The metric has been plotted across all available consecutive periods.\n"
-                f"- **Latest Status:** The historical dataset has been successfully parsed and is plotted below.\n\n"
-                f"Please refer to the trend chart below to observe the chronological sequence and variation of '{metric}' across the timeline."
+                f"### Trend Timeline for **{metric}**{filter_text}{year_text}\n\n"
+                f"- **Overall Direction**: **{direction.capitalize()}** trend\n"
+                f"- **Status**: Timeline successfully generated and plotted below"
             )
         
         chart_spec = _maybe_chart("get_trend", result)

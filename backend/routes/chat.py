@@ -25,7 +25,14 @@ def chat(payload: schemas.ChatRequest, db: Session = Depends(get_db)):
     schema = dataset.column_schema
     summary = pp.dataframe_summary_for_ai(df, schema)
 
-    result = chat_engine.handle_chat(df, schema, payload.message, summary)
+    company_name = None
+    if payload.user_email:
+        from models import User
+        user = db.query(User).filter(User.email == payload.user_email.lower().strip()).first()
+        if user:
+            company_name = user.company_name
+
+    result = chat_engine.handle_chat(df, schema, payload.message, summary, company_name=company_name)
 
     crud.save_chat(
         db,

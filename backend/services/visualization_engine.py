@@ -12,11 +12,14 @@ from __future__ import annotations
 def trend_to_chart(trend: dict, label: str = None) -> dict:
     if "error" in trend:
         return {"error": trend["error"]}
+    ds_label = label or trend["metric"]
+    if not label and trend.get("filter_val"):
+        ds_label = f"{trend['metric']} ({trend['filter_val']})"
     return {
         "type": "line",
         "labels": trend["periods"],
         "datasets": [{
-            "label": label or trend["metric"],
+            "label": ds_label,
             "data": trend["values"],
         }],
     }
@@ -26,11 +29,14 @@ def comparison_to_chart(comparison: dict, chart_type: str = "bar") -> dict:
     if "error" in comparison:
         return {"error": comparison["error"]}
     ranking = comparison["ranking"]
+    ds_label = comparison["metric"]
+    if comparison.get("filter_val"):
+        ds_label = f"{comparison['metric']} ({comparison['filter_val']})"
     return {
         "type": chart_type,
         "labels": [r[comparison["dimension"]] for r in ranking],
         "datasets": [{
-            "label": comparison["metric"],
+            "label": ds_label,
             "data": [r[comparison["metric"]] for r in ranking],
         }],
     }

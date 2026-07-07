@@ -28,8 +28,10 @@ class Settings:
     )
 
     # --- LLM ---
-    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-    LLM_MODEL = os.getenv("LLM_MODEL", "claude-sonnet-4-6")
+    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
+    LLM_MODEL = os.getenv("LLM_MODEL", "claude-sonnet-4-6").strip()
 
     # --- Storage ---
     UPLOAD_DIR = BASE_DIR / "storage" / "uploads"

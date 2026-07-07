@@ -15,8 +15,8 @@ from sklearn.metrics import r2_score
 from services import analytics_engine as ae
 
 
-def forecast_metric(df, schema: dict, metric: str, horizon_periods: int = 6) -> dict:
-    trend = ae.get_trend(df, schema, metric)
+def forecast_metric(df, schema: dict, metric: str, horizon_periods: int = 6, filter_col: str | None = None, filter_val: str | None = None) -> dict:
+    trend = ae.get_trend(df, schema, metric, filter_col=filter_col, filter_val=filter_val)
     if "error" in trend:
         return trend
 
@@ -53,6 +53,8 @@ def forecast_metric(df, schema: dict, metric: str, horizon_periods: int = 6) -> 
             {"period": p, "value": round(float(v), 2)}
             for p, v in zip(future_periods, future_y)
         ],
+        "filter_col": filter_col,
+        "filter_val": filter_val,
     }
 
 
