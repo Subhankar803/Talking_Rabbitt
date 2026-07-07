@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Forecast — Talking Rabbitt</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/style.css">
+<link rel="stylesheet" href="/css/dashboard.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="app-shell">
+  <div id="sidebar-mount"></div>
+
+  <div class="main">
+    <div class="topbar">
+      <div>
+        <div class="topbar-title">Forecast</div>
+        <div class="topbar-sub">Project future performance with scikit-learn</div>
+      </div>
+      <div class="dataset-pill" data-dataset-pill></div>
+    </div>
+
+    <div class="content" data-requires-dataset>
+      <div class="card" style="margin-bottom:20px">
+        <div class="metric-controls">
+          <div>
+            <label style="display:block; font-size:12px; color:var(--text-muted); margin-bottom:6px">Metric</label>
+            <select id="metric-select"></select>
+          </div>
+          <div>
+            <label style="display:block; font-size:12px; color:var(--text-muted); margin-bottom:6px">Horizon (periods)</label>
+            <input type="number" id="horizon-input" value="6" min="1" max="24" style="width:90px">
+          </div>
+          <button id="run-forecast" class="btn btn-primary" style="align-self:flex-end"><i class="ti ti-player-play"></i> Run forecast</button>
+        </div>
+      </div>
+
+      <div id="forecast-result">
+        <div class="empty-state"><i class="ti ti-trending-up"></i>Choose a metric and run a forecast.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/js/app.js"></script>
+<script src="/js/charts.js"></script>
+<script src="/js/forecast.js"></script>
+</body>
+</html>

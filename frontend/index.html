@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Home — Talking Rabbitt</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/style.css">
+<link rel="stylesheet" href="/css/dashboard.css">
+<style>
+  .hero-card {
+    background: linear-gradient(135deg, var(--surface) 0%, var(--bg-elevated) 100%);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 32px;
+    margin-bottom: 24px;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero-card::after {
+    content: '';
+    position: absolute;
+    top: -50%; right: -30%;
+    width: 300px; height: 300px;
+    background: radial-gradient(circle, var(--signal-dim) 0%, transparent 70%);
+    opacity: 0.6;
+    pointer-events: none;
+  }
+  .hero-title {
+    font-size: 28px;
+    margin-bottom: 12px;
+    font-family: var(--font-display);
+    color: var(--text-primary);
+  }
+  .hero-sub {
+    color: var(--text-secondary);
+    max-width: 600px;
+    margin-bottom: 24px;
+    font-size: 14.5px;
+  }
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .feature-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    transition: transform 0.2s, border-color 0.2s;
+  }
+  .feature-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--border-strong);
+  }
+  .feature-icon {
+    font-size: 24px;
+    color: var(--signal);
+    margin-bottom: 12px;
+  }
+  .feature-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    font-family: var(--font-display);
+  }
+  .feature-desc {
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <div id="sidebar-mount"></div>
+
+  <div class="main">
+    <div class="topbar">
+      <div>
+        <div class="topbar-title">Home</div>
+        <div class="topbar-sub">Conversational AI Business Intelligence Assistant</div>
+      </div>
+      <div class="dataset-pill" data-dataset-pill></div>
+    </div>
+
+    <div class="content">
+      <div class="hero-card">
+        <div class="hero-title">Say hello to Talking Rabbitt</div>
+        <div class="hero-sub">Ingest any business spreadsheet, clean it automatically, and start chatting with your data in natural language using advanced LLM tool-calling orchestration.</div>
+        <a href="/upload" class="btn btn-primary"><i class="ti ti-upload"></i> Get started by uploading data</a>
+      </div>
+
+      <div class="section-title">Features</div>
+      <div class="features-grid">
+        <div class="feature-card">
+          <i class="ti ti-cloud-upload feature-icon"></i>
+          <div class="feature-title">Data Ingestion &amp; Cleaning</div>
+          <div class="feature-desc">Upload CSV or Excel files. Automated null imputation, duplicate elimination, whitespace stripping, and column type classification.</div>
+        </div>
+        <div class="feature-card">
+          <i class="ti ti-chart-bar feature-icon"></i>
+          <div class="feature-title">Auto-Generated Dashboard</div>
+          <div class="feature-desc">Instant view of vital KPIs, anomalies, performance charts, and automatically detected growth trends.</div>
+        </div>
+        <div class="feature-card">
+          <i class="ti ti-message-chatbot feature-icon"></i>
+          <div class="feature-title">Conversational AI (Ask Rabbitt)</div>
+          <div class="feature-desc">Conversational search with voice and text. LLM invokes specialized local data tools to ensure replies are mathematically accurate.</div>
+        </div>
+        <div class="feature-card">
+          <i class="ti ti-trending-up feature-icon"></i>
+          <div class="feature-title">Predictive Forecasting</div>
+          <div class="feature-desc">Project any metric into the future using linear regression modeling, backed by confidence intervals.</div>
+        </div>
+        <div class="feature-card">
+          <i class="ti ti-report feature-icon"></i>
+          <div class="feature-title">Executive Summary</div>
+          <div class="feature-desc">Auto-generated business health reports detailing strengths, weaknesses, threats, and prioritized recommendations.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/js/app.js"></script>
+</body>
+</html>

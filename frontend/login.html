@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Powered Business Intelligence Dashboard - Sign In</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/login.css">
+</head>
+<body>
+
+    <div class="login-container">
+        <div class="left-panel">
+            <div class="branding-content">
+                <h2>AI Powered<br>Business Intelligence<br>Dashboard</h2>
+                <div class="accent-line"></div>
+            </div>
+            
+            <div class="chart-vector-container">
+                <div class="bar-chart-mock">
+                    <div class="bar" style="height: 20%"></div>
+                    <div class="bar" style="height: 35%"></div>
+                    <div class="bar" style="height: 28%"></div>
+                    <div class="bar" style="height: 55%"></div>
+                    <div class="bar" style="height: 48%"></div>
+                    <div class="bar" style="height: 75%"></div>
+                    <div class="bar" style="height: 60%"></div>
+                    <div class="bar" style="height: 90%"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="right-panel">
+            <div class="form-wrapper">
+                
+                <div class="logo-container">
+                    <div class="logo-icon">
+                        <i class="fa-solid fa-chart-simple"></i>
+                    </div>
+                </div>
+
+                <form id="loginForm">
+                    <div class="input-group">
+                        <label for="email">Email</label>
+                        <div class="input-wrapper">
+                            <i class="fa-regular fa-envelope input-icon"></i>
+                            <input type="email" id="email" placeholder="Enter your email" required>
+                        </div>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="password">Password</label>
+                        <div class="input-wrapper">
+                            <i class="fa-solid fa-lock input-icon"></i>
+                            <input type="password" id="password" placeholder="Enter your password" required>
+                            <i class="fa-regular fa-eye toggle-password" id="togglePassword"></i>
+                        </div>
+                    </div>
+
+                    <div class="form-options">
+                        <label class="remember-me">
+                            <input type="checkbox" id="rememberMe">
+                            <span class="custom-checkbox"></span>
+                            Remember me
+                        </label>
+                        <a href="#" class="forgot-password">Forgot password?</a>
+                    </div>
+
+                    <button type="submit" class="submit-btn">Sign In</button>
+                </form>
+
+                <div class="divider">
+                    <span>or</span>
+                </div>
+
+                <div class="signup-prompt">
+                    Don't have an account? <a href="/sign_up">Sign up</a>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/login.js"></script>
+</body>
+</html>

@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InsightIQ - Create Your Account</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/sign_up.css">
+</head>
+<body>
+
+    <div class="page-container">
+        <div class="left-panel">
+            <div class="brand-header">
+                <i class="fa-solid fa-chart-simple brand-logo-icon"></i>
+                <span class="brand-name">Insight<span class="brand-highlight">IQ</span></span>
+            </div>
+
+            <div class="branding-content">
+                <h2>AI Powered<br>Business Intelligence<br>Dashboard</h2>
+                <div class="accent-line"></div>
+                <p class="branding-desc">
+                    Transform your data into actionable insights and make smarter decisions faster than ever.
+                </p>
+            </div>
+
+            <div class="features-container">
+                <div class="feature-item">
+                    <div class="feature-icon-box">
+                        <i class="fa-solid fa-chart-bar"></i>
+                    </div>
+                    <div class="feature-text">
+                        <h4>Real-time Analytics</h4>
+                        <p>Track performance and metrics in real-time</p>
+                    </div>
+                </div>
+
+                <div class="feature-item">
+                    <div class="feature-icon-box">
+                        <i class="fa-solid fa-brain"></i>
+                    </div>
+                    <div class="feature-text">
+                        <h4>AI-Powered Insights</h4>
+                        <p>Get intelligent insights powered by AI</p>
+                    </div>
+                </div>
+
+                <div class="feature-item">
+                    <div class="feature-icon-box">
+                        <i class="fa-solid fa-shield-halved"></i>
+                    </div>
+                    <div class="feature-text">
+                        <h4>Secure & Reliable</h4>
+                        <p>Enterprise-grade security for your data</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="right-panel">
+            <div class="form-wrapper">
+                
+                <div class="form-header-container">
+                    <div class="user-avatar-icon">
+                        <i class="fa-solid fa-user-plus"></i>
+                    </div>
+                    <h3>Create Your Account</h3>
+                    <p class="form-subtitle">Fill in the details below to get started</p>
+                </div>
+
+                <form id="signupForm">
+                    <div class="input-group">
+                        <label for="fullName">Full Name</label>
+                        <div class="input-wrapper">
+                            <i class="fa-regular fa-user input-icon"></i>
+                            <input type="text" id="fullName" placeholder="Enter your full name" required>
+                        </div>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="companyName">Company Name</label>
+                        <div class="input-wrapper">
+                            <i class="fa-regular fa-building input-icon"></i>
+                            <input type="text" id="companyName" placeholder="Enter your company name" required>
+                        </div>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="email">Email</label>
+                        <div class="input-wrapper">
+                            <i class="fa-regular fa-envelope input-icon"></i>
+                            <input type="email" id="email" placeholder="Enter your email" required>
+                        </div>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="password">Password</label>
+                        <div class="input-wrapper">
+                            <i class="fa-solid fa-lock input-icon"></i>
+                            <input type="password" id="password" placeholder="Create a password" required>
+                            <i class="fa-regular fa-eye-slash toggle-password" data-target="password"></i>
+                        </div>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="confirmPassword">Confirm Password</label>
+                        <div class="input-wrapper">
+                            <i class="fa-solid fa-lock input-icon"></i>
+                            <input type="password" id="confirmPassword" placeholder="Confirm your password" required>
+                            <i class="fa-regular fa-eye-slash toggle-password" data-target="confirmPassword"></i>
+                        </div>
+                    </div>
+
+                    <div class="terms-option">
+                        <label class="checkbox-container">
+                            <input type="checkbox" id="agreeTerms" required>
+                            <span class="custom-checkbox"></span>
+                            I agree to the <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a>
+                        </label>
+                    </div>
+
+                    <button type="submit" class="submit-btn">Sign Up</button>
+                </form>
+
+                <div class="signin-prompt">
+                    Already have an account? <a href="/login">Sign in</a>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/sign_up.js"></script>
+</body>
+</html>

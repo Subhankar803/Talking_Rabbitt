@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard — Talking Rabbitt</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/style.css">
+<link rel="stylesheet" href="/css/dashboard.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="app-shell">
+  <div id="sidebar-mount"></div>
+
+  <div class="main">
+    <div class="topbar">
+      <div>
+        <div class="topbar-title">Dashboard</div>
+        <div class="topbar-sub">Live KPIs, trends, and performance rankings</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <button id="view-chat-history-btn" class="btn btn-ghost" style="padding: 6px 12px; font-size: 12.5px; height: 32px;"><i class="ti ti-history"></i> Chat History</button>
+        <div class="dataset-pill" data-dataset-pill></div>
+      </div>
+    </div>
+
+    <div class="content" data-requires-dataset>
+      <div class="grid grid-4" id="kpi-grid" style="margin-bottom:20px">
+        <div class="card kpi-card"><div class="skeleton" style="height:14px;width:60%;margin-bottom:10px"></div><div class="skeleton" style="height:26px;width:40%"></div></div>
+        <div class="card kpi-card"><div class="skeleton" style="height:14px;width:60%;margin-bottom:10px"></div><div class="skeleton" style="height:26px;width:40%"></div></div>
+        <div class="card kpi-card"><div class="skeleton" style="height:14px;width:60%;margin-bottom:10px"></div><div class="skeleton" style="height:26px;width:40%"></div></div>
+        <div class="card kpi-card"><div class="skeleton" style="height:14px;width:60%;margin-bottom:10px"></div><div class="skeleton" style="height:26px;width:40%"></div></div>
+      </div>
+
+      <div class="card chart-card" style="margin-bottom:20px">
+        <div class="card-title"><i class="ti ti-chart-line"></i> Trend over time</div>
+        <div id="anomaly-count" style="font-size:11.5px; color:var(--text-muted); margin-bottom:10px"></div>
+        <div style="height:260px"><canvas id="trend-chart"></canvas></div>
+        <div class="chart-empty hidden"><i class="ti ti-chart-line"></i>&nbsp; No time-series data detected.</div>
+      </div>
+
+      <div class="section-title">Performance breakdown</div>
+      <div id="performers-section" style="margin-bottom:24px">
+        <div class="grid grid-2">
+          <div class="card"><div class="skeleton" style="height:120px"></div></div>
+          <div class="card"><div class="skeleton" style="height:120px"></div></div>
+        </div>
+      </div>
+
+      <div class="section-title">Risk signals</div>
+      <div id="risk-section"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Chat History Modal -->
+<div id="chat-history-modal" class="modal-overlay">
+  <div class="modal-container">
+    <div class="modal-header">
+      <div class="modal-title"><i class="ti ti-history" style="color:var(--signal)"></i> My Chat History</div>
+      <button class="modal-close" id="close-chat-history-btn"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body" id="chat-history-modal-body">
+      <!-- Loaded dynamically via js -->
+    </div>
+  </div>
+</div>
+
+<script src="/js/app.js"></script>
+<script src="/js/charts.js"></script>
+<script src="/js/dashboard.js"></script>
+</body>
+</html>
