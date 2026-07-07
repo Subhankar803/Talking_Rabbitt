@@ -51,18 +51,35 @@ class ChatRequest(BaseModel):
     dataset_id: int
     message: str
     user_email: Optional[str] = None
+    session_id: Optional[str] = None
+    session_title: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
     answer: str
     chart_spec: Optional[dict] = None
     tools_used: list[str] = []
+    session_id: Optional[str] = None
+    session_title: Optional[str] = None
 
 
 class ChatHistoryItem(BaseModel):
     question: str
     answer: str
     created_at: datetime
+    session_id: Optional[str] = None
+    session_title: Optional[str] = None
+    chart_spec: Optional[dict] = None
+    tools_used: list[str] = []
+
+    class Config:
+        from_attributes = True
+
+
+class ChatSessionItem(BaseModel):
+    session_id: str
+    session_title: str
+    last_updated: datetime
 
     class Config:
         from_attributes = True

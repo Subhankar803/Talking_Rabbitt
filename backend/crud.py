@@ -41,7 +41,7 @@ def list_datasets(db: Session, limit: int = 20):
 
 # ---------- Chat ----------
 
-def save_chat(db: Session, *, dataset_id, question, answer, tools_used, chart_spec, user_email: str = None):
+def save_chat(db: Session, *, dataset_id, question, answer, tools_used, chart_spec, user_email: str = None, session_id: str = None, session_title: str = None):
     chat = models.ChatHistory(
         dataset_id=dataset_id,
         user_email=user_email,
@@ -49,6 +49,8 @@ def save_chat(db: Session, *, dataset_id, question, answer, tools_used, chart_sp
         answer=answer,
         tools_used=tools_used,
         chart_spec=chart_spec,
+        session_id=session_id,
+        session_title=session_title,
     )
     db.add(chat)
     db.commit()
@@ -65,6 +67,33 @@ def get_chat_history(db: Session, dataset_id: int, user_email: str = None, limit
         .limit(limit)
         .all()
     )
+
+
+def get_chat_sessions(db: Session, dataset_id: int, user_email: str = None):
+    from sqlalchemy import func
+    query = db.query(
+        models.ChatHistory.session_id,
+        func.max(models.ChatHistory.session_title).label("session_title"),
+        func.max(models.ChatHistory.created_at).label("last_updated")
+    ).filter(
+        models.ChatHistory.dataset_id == dataset_id,
+        models.ChatHistory.session_id != None
+    )
+    if user_email:
+        query = query.filter(models.ChatHistory.user_email == user_email)
+    
+    results = query.group_by(models.ChatHistory.session_id).order_by(func.max(models.ChatHistory.created_at).desc()).all()
+    return [
+        {"session_id": r[0], "session_title": r[1] or "Unnamed Chat", "last_updated": r[2]}
+        for r in results
+    ]
+
+
+def get_session_history(db: Session, session_id: str, user_email: str = None):
+    query = db.query(models.ChatHistory).filter(models.ChatHistory.session_id == session_id)
+    if user_email:
+        query = query.filter(models.ChatHistory.user_email == user_email)
+    return query.order_by(models.ChatHistory.created_at.asc()).all()
 
 
 # ---------- Recommendations ----------

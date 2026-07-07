@@ -11,13 +11,32 @@ document.addEventListener("DOMContentLoaded", async () => {
   const input = document.getElementById("chat-input");
   const micBtn = document.getElementById("mic-btn");
   const speakToggle = document.getElementById("speak-toggle");
+  const sessionsList = document.getElementById("chat-sessions-list");
+  const newChatBtn = document.getElementById("new-chat-btn");
+  const toggleHistoryBtn = document.getElementById("toggle-history-btn");
+  const sidebar = document.querySelector(".chat-history-sidebar");
+
   let chartCounter = 0;
+  let currentSessionId = null;
 
   const userRaw = localStorage.getItem("tr_user");
   const user = userRaw ? JSON.parse(userRaw) : null;
   const email = user ? user.email : null;
 
-  loadHistory();
+  // Restore sidebar state
+  if (localStorage.getItem("tr_chat_sidebar_collapsed") === "true" && sidebar) {
+    sidebar.classList.add("collapsed");
+  }
+
+  // Initialize page
+  initChat();
+
+  if (toggleHistoryBtn && sidebar) {
+    toggleHistoryBtn.addEventListener("click", () => {
+      sidebar.classList.toggle("collapsed");
+      localStorage.setItem("tr_chat_sidebar_collapsed", sidebar.classList.contains("collapsed"));
+    });
+  }
 
   form.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -26,6 +45,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     input.value = "";
     sendMessage(message);
   });
+
+  if (newChatBtn) {
+    newChatBtn.addEventListener("click", () => {
+      startNewChat();
+    });
+  }
 
   if (micBtn) {
     if (!VoiceAssistant.isSupported()) micBtn.disabled = true;
@@ -39,30 +64,110 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  async function loadHistory() {
+  async function initChat() {
+    await loadSessions();
+    const firstSession = sessionsList.querySelector(".chat-session-item");
+    if (firstSession) {
+      firstSession.click();
+    } else {
+      startNewChat();
+    }
+  }
+
+  function startNewChat() {
+    currentSessionId = null;
+    thread.innerHTML = `
+      <div class="empty-state">
+        <i class="ti ti-message-chatbot" style="color:var(--signal)"></i>
+        <div style="font-family:var(--font-display); font-size:18px; font-weight:600; margin-bottom:4px;">Ask Rabbitt</div>
+        <div style="color:var(--text-muted); font-size:12.5px;">Ask questions, explore correlations, and forecast metrics with AI.</div>
+      </div>
+    `;
+    document.querySelectorAll(".chat-session-item").forEach(item => item.classList.remove("active"));
+  }
+
+  async function loadSessions() {
     try {
-      const url = email ? `/chat/${dataset.dataset_id}/history?user_email=${encodeURIComponent(email)}` : `/chat/${dataset.dataset_id}/history`;
+      const url = email ? `/chat/${dataset.dataset_id}/sessions?user_email=${encodeURIComponent(email)}` : `/chat/${dataset.dataset_id}/sessions`;
+      const sessions = await apiFetch(url);
+      sessionsList.innerHTML = "";
+      if (!sessions || sessions.length === 0) {
+        sessionsList.innerHTML = `<div style="text-align:center; padding:20px 0; color:var(--text-muted); font-size:12px;">No past chats</div>`;
+        return;
+      }
+      sessions.forEach((s) => {
+        const item = document.createElement("button");
+        item.className = `chat-session-item ${s.session_id === currentSessionId ? 'active' : ''}`;
+        item.dataset.sessionId = s.session_id;
+        item.innerHTML = `
+          <i class="ti ti-message-circle"></i>
+          <span class="chat-session-title" title="${escapeHtml(s.session_title)}">${escapeHtml(s.session_title)}</span>
+        `;
+        item.addEventListener("click", () => {
+          loadSessionHistory(s.session_id);
+        });
+        sessionsList.appendChild(item);
+      });
+    } catch (err) {
+      sessionsList.innerHTML = `<div style="color:var(--danger); text-align:center; font-size:12px; padding:10px 0;">Error loading sessions</div>`;
+    }
+  }
+
+  async function loadSessionHistory(sessionId) {
+    currentSessionId = sessionId;
+    // Update active highlight
+    document.querySelectorAll(".chat-session-item").forEach((item) => {
+      item.classList.toggle("active", item.dataset.sessionId === sessionId);
+    });
+
+    thread.innerHTML = "";
+    chartCounter = 0;
+
+    try {
+      const url = email ? `/chat/session/${sessionId}?user_email=${encodeURIComponent(email)}` : `/chat/session/${sessionId}`;
       const history = await apiFetch(url);
       history.forEach((item) => {
         appendMessage("user", item.question);
-        appendMessage("assistant", item.answer);
+        appendMessage("assistant", item.answer, item.chart_spec, item.tools_used);
       });
       scrollToBottom();
-    } catch { /* first visit, no history yet — fine */ }
+    } catch (err) {
+      appendSystemNote("Failed to load chat history.");
+    }
   }
 
   async function sendMessage(message) {
+    if (currentSessionId === null) {
+      thread.innerHTML = "";
+    }
+
     appendMessage("user", message);
     const thinkingId = appendThinking();
     scrollToBottom();
 
     try {
+      const bodyPayload = {
+        dataset_id: dataset.dataset_id,
+        message,
+        user_email: email
+      };
+      if (currentSessionId) {
+        bodyPayload.session_id = currentSessionId;
+      }
+
       const res = await apiFetch("/chat", {
         method: "POST",
-        body: JSON.stringify({ dataset_id: dataset.dataset_id, message, user_email: email }),
+        body: JSON.stringify(bodyPayload),
       });
+
       document.getElementById(thinkingId)?.remove();
       appendMessage("assistant", res.answer, res.chart_spec, res.tools_used);
+
+      if (!currentSessionId) {
+        currentSessionId = res.session_id;
+        await loadSessions();
+      }
+
       if (speakToggle?.checked) VoiceAssistant.speak(res.answer);
     } catch (err) {
       document.getElementById(thinkingId)?.remove();

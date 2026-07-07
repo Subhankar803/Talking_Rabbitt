@@ -43,6 +43,8 @@ class ChatHistory(Base):
     answer = Column(Text, nullable=False)
     tools_used = Column(JSON, default=list)     # which analytics functions the LLM called
     chart_spec = Column(JSON, nullable=True)      # chart data returned alongside the answer
+    session_id = Column(String(255), nullable=True, index=True)
+    session_title = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     dataset = relationship("Dataset", back_populates="chat_history")

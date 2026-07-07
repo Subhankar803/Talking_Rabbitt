@@ -2,6 +2,7 @@
 routes/chat.py
 Conversational analytics endpoint — the "talking" part of the dashboard.
 """
+import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -34,6 +35,11 @@ def chat(payload: schemas.ChatRequest, db: Session = Depends(get_db)):
 
     result = chat_engine.handle_chat(df, schema, payload.message, summary, company_name=company_name)
 
+    session_id = payload.session_id or str(uuid.uuid4())
+    session_title = payload.session_title
+    if not session_title:
+        session_title = payload.message[:40] + ("..." if len(payload.message) > 40 else "")
+
     crud.save_chat(
         db,
         dataset_id=payload.dataset_id,
@@ -42,11 +48,29 @@ def chat(payload: schemas.ChatRequest, db: Session = Depends(get_db)):
         tools_used=result["tools_used"],
         chart_spec=result["chart_spec"],
         user_email=payload.user_email,
+        session_id=session_id,
+        session_title=session_title,
     )
 
-    return schemas.ChatResponse(**result)
+    return schemas.ChatResponse(
+        answer=result["answer"],
+        chart_spec=result["chart_spec"],
+        tools_used=result["tools_used"],
+        session_id=session_id,
+        session_title=session_title,
+    )
 
 
 @router.get("/{dataset_id}/history", response_model=list[schemas.ChatHistoryItem])
 def history(dataset_id: int, user_email: str = None, db: Session = Depends(get_db)):
     return crud.get_chat_history(db, dataset_id, user_email=user_email)
+
+
+@router.get("/{dataset_id}/sessions", response_model=list[schemas.ChatSessionItem])
+def list_sessions(dataset_id: int, user_email: str = None, db: Session = Depends(get_db)):
+    return crud.get_chat_sessions(db, dataset_id, user_email=user_email)
+
+
+@router.get("/session/{session_id}", response_model=list[schemas.ChatHistoryItem])
+def get_session(session_id: str, user_email: str = None, db: Session = Depends(get_db)):
+    return crud.get_session_history(db, session_id, user_email=user_email)
