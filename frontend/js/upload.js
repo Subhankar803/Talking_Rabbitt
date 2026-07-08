@@ -25,6 +25,23 @@ document.addEventListener("DOMContentLoaded", () => {
     if (e.target.files[0]) handleUpload(e.target.files[0]);
   });
 
+  // Load active dataset if exists
+  const activeDataset = AppState.getDataset();
+  if (activeDataset && activeDataset.dataset_id) {
+    loadExistingDataset(activeDataset.dataset_id);
+  }
+
+  async function loadExistingDataset(datasetId) {
+    statusEl.innerHTML = `<span class="spinner"></span> Loading active dataset...`;
+    try {
+      const data = await apiFetch(`/upload/${datasetId}`);
+      statusEl.innerHTML = `<span style="color:var(--signal)"><i class="ti ti-check"></i> Active dataset loaded.</span>`;
+      renderResult(data);
+    } catch (err) {
+      statusEl.innerHTML = `<span style="color:var(--danger)">Failed to load active dataset: ${err.message}</span>`;
+    }
+  }
+
   async function handleUpload(file) {
     const validExt = /\.(csv|xlsx|xls)$/i.test(file.name);
     if (!validExt) {

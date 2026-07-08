@@ -73,3 +73,23 @@ async def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get
 @router.get("/list", response_model=list[schemas.DatasetSummary])
 def list_datasets(db: Session = Depends(get_db)):
     return crud.list_datasets(db)
+
+
+@router.get("/{dataset_id}", response_model=schemas.DatasetPreviewResponse)
+def get_dataset(dataset_id: int, db: Session = Depends(get_db)):
+    dataset = crud.get_dataset(db, dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    
+    df = cache.load(dataset.id, dataset.cache_path)
+    from utils.helpers import dataframe_preview
+    
+    return schemas.DatasetPreviewResponse(
+        dataset_id=dataset.id,
+        original_name=dataset.original_name,
+        row_count=dataset.row_count,
+        column_count=dataset.column_count,
+        column_schema=dataset.column_schema,
+        preprocessing_report=dataset.preprocessing_report,
+        preview_rows=dataframe_preview(df, 10),
+    )

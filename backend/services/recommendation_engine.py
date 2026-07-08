@@ -1,11 +1,13 @@
 """
 recommendation_engine.py
 
-Generates business recommendations grounded in actual analytics
-output. Rule-based signals decide *what* to recommend; the LLM
-(via chat_engine.generate_text) is used to phrase the *reasoning*
-in natural language so it reads like an analyst wrote it, not a
-template. Falls back to templated reasoning if the LLM is unavailable.
+Generates business recommendations grounded in actual analytics output.
+Rule-based signals decide both *what* to recommend and how the reasoning
+is phrased — this module does not call an LLM. (An earlier version of
+this docstring claimed reasoning was phrased by chat_engine.generate_text;
+that function never existed, so that claim was removed. If you want
+LLM-phrased reasoning, pipe the templated facts below through
+chat_engine's Anthropic client as a follow-up.)
 """
 from __future__ import annotations
 
@@ -18,7 +20,11 @@ def generate_recommendations(df, schema: dict) -> list[dict]:
     numeric_cols = [c for c, t in schema.items() if t == "numeric"]
     categorical_cols = [c for c, t in schema.items() if t == "categorical"]
 
-    metric_col = _pick(numeric_cols, ["revenue", "sales", "amount"]) or (numeric_cols[0] if numeric_cols else None)
+    revenue_col = _pick(numeric_cols, ["revenue", "sales", "amount"]) or (numeric_cols[0] if numeric_cols else None)
+    profit_col = _pick(numeric_cols, ["profit", "margin"])
+    # Use profit for pricing-flavored insight when it's a distinct column, so every
+    # recommendation isn't anchored to the same single metric.
+    metric_col = revenue_col
     region_col = _pick(categorical_cols, ["region", "country", "state", "location"])
     product_col = _pick(categorical_cols, ["product", "category", "item"])
     campaign_col = _pick(categorical_cols, ["campaign", "channel", "marketing"])
@@ -79,6 +85,22 @@ def generate_recommendations(df, schema: dict) -> list[dict]:
                     f"{anomalies['anomalies_found']} records fall well outside the normal range "
                     f"for {metric_col} (beyond 2.5 standard deviations from the mean). These could "
                     f"indicate data entry errors, one-off bulk orders, or emerging risks worth a manual review."
+                ),
+                "impact": "medium",
+            })
+
+    if profit_col and profit_col != metric_col and product_col:
+        comp = ae.compare_dimension(df, schema, product_col, profit_col)
+        if "error" not in comp and comp.get("worst"):
+            worst = comp["worst"]
+            recs.append({
+                "category": "pricing",
+                "title": f"Review pricing or cost structure for {worst.get(product_col)}",
+                "reasoning": (
+                    f"{worst.get(product_col)} generates the lowest {profit_col} of all "
+                    f"{product_col} segments ({worst.get('share_pct', 0)}% share), even though "
+                    f"it may still sell well. Consider a pricing review, supplier renegotiation, "
+                    f"or bundling to improve its margin contribution."
                 ),
                 "impact": "medium",
             })

@@ -31,6 +31,7 @@ use_gemini = False
 use_openrouter = False
 use_openai = False
 use_grok = False
+use_groq = False
 
 # Gather available API keys
 gemini_key = settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY or settings.ANTHROPIC_API_KEY
@@ -38,6 +39,7 @@ anthropic_key = settings.ANTHROPIC_API_KEY
 openrouter_key = settings.ANTHROPIC_API_KEY
 openai_key = settings.OPENAI_API_KEY
 grok_key = settings.GROK_API_KEY
+groq_key = settings.GROQ_API_KEY
 
 if settings.LLM_MODEL and settings.LLM_MODEL.lower().startswith("gemini"):
     use_gemini = True
@@ -45,6 +47,8 @@ elif settings.LLM_MODEL and (settings.LLM_MODEL.lower().startswith("gpt") or "op
     use_openai = True
 elif settings.LLM_MODEL and (settings.LLM_MODEL.lower().startswith("grok") or "xai" in settings.LLM_MODEL.lower()):
     use_grok = True
+elif settings.LLM_MODEL and (settings.LLM_MODEL.lower().startswith("groq") or "llama" in settings.LLM_MODEL.lower() or "mixtral" in settings.LLM_MODEL.lower()):
+    use_groq = True
 elif gemini_key and (
     gemini_key.startswith("AQ.") or gemini_key.startswith("AIzaSy")
 ):
@@ -53,6 +57,8 @@ elif openai_key and openai_key.startswith("sk-"):
     use_openai = True
 elif grok_key and grok_key.startswith("xai-"):
     use_grok = True
+elif groq_key and groq_key.startswith("gsk_"):
+    use_groq = True
 elif anthropic_key and anthropic_key.startswith("sk-or-"):
     use_openrouter = True
 
@@ -435,6 +441,126 @@ def _handle_grok_chat(df, schema: dict, message: str, dataset_summary: str, comp
         return _fallback_response(df, schema, message, company_name=company_name)
 
 
+def _handle_groq_chat(df, schema: dict, message: str, dataset_summary: str, company_name: str = None) -> dict:
+    if not settings.GROQ_API_KEY:
+        return _fallback_response(df, schema, message, company_name=company_name)
+
+    try:
+        import urllib.request
+        import urllib.error
+        
+        # Map the tools to Groq/OpenAI tool format
+        openai_tools = []
+        for tool in TOOLS:
+            openai_tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "parameters": tool["input_schema"]
+                }
+            })
+
+        company_context = f"\nUser Company Name: {company_name}\n" if company_name else ""
+        messages = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": f"Dataset context:\n{dataset_summary}{company_context}\nQuestion: {message}"}
+        ]
+
+        tools_used = []
+        chart_spec = None
+        final_text = ""
+
+        headers = {
+            "Authorization": f"Bearer {settings.GROQ_API_KEY}",
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        model = settings.LLM_MODEL
+        if not model or model.lower() == "groq" or model.lower() == "llama3-8b-8192":
+            model = "llama-3.1-8b-instant"  # map groq/llama3-8b-8192 to llama-3.1-8b-instant
+
+        for _ in range(4):  # cap tool-use loops to avoid runaway calls
+            data = {
+                "model": model,
+                "messages": messages,
+                "tools": openai_tools,
+                "temperature": 0.0
+            }
+            
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(data).encode("utf-8"),
+                headers=headers,
+                method="POST"
+            )
+            
+            try:
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    res_body = json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                err_msg = e.read().decode("utf-8")
+                logger.error(f"Groq HTTP Error: {err_msg}")
+                return _fallback_response(df, schema, message, company_name=company_name)
+            except Exception as e:
+                logger.error(f"Groq Connection Error: {e}")
+                return _fallback_response(df, schema, message, company_name=company_name)
+
+            choices = res_body.get("choices", [])
+            if not choices:
+                break
+            choice = choices[0]
+            msg_obj = choice.get("message", {})
+            
+            if msg_obj.get("content"):
+                final_text = msg_obj["content"]
+                
+            tool_calls = msg_obj.get("tool_calls", [])
+            if not tool_calls:
+                break
+                
+            assistant_msg = {
+                "role": "assistant",
+                "content": msg_obj.get("content"),
+                "tool_calls": tool_calls
+            }
+            messages.append(assistant_msg)
+            
+            for call in tool_calls:
+                func = call.get("function", {})
+                name = func.get("name")
+                call_id = call.get("id")
+                
+                try:
+                    args = json.loads(func.get("arguments", "{}"))
+                except Exception:
+                    args = {}
+                    
+                tools_used.append(name)
+                result = _execute_tool(df, schema, name, args)
+                
+                if chart_spec is None:
+                    chart_spec = _maybe_chart(name, result)
+                    
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": name,
+                    "content": json.dumps(result)
+                })
+
+        return {
+            "answer": final_text or "I wasn't able to generate an answer from the available data.",
+            "chart_spec": chart_spec,
+            "tools_used": list(set(tools_used)),
+        }
+    except Exception as e:
+        logger.warning(f"Groq API call failed: {e}. Falling back to local analytics.")
+        return _fallback_response(df, schema, message, company_name=company_name)
+
+
 def _handle_anthropic_chat(df, schema: dict, message: str, dataset_summary: str, company_name: str = None) -> dict:
     if _anthropic_client is None:
         return _fallback_response(df, schema, message, company_name=company_name)
@@ -500,6 +626,8 @@ def handle_chat(df, schema: dict, message: str, dataset_summary: str, company_na
         res = _handle_openai_chat(df, schema, message, dataset_summary, company_name=company_name)
     elif use_grok:
         res = _handle_grok_chat(df, schema, message, dataset_summary, company_name=company_name)
+    elif use_groq:
+        res = _handle_groq_chat(df, schema, message, dataset_summary, company_name=company_name)
     elif use_openrouter:
         res = _handle_openrouter_chat(df, schema, message, dataset_summary, company_name=company_name)
     else:
