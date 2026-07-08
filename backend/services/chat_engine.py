@@ -828,16 +828,22 @@ def _maybe_chart(tool_name, result):
         combined_ranking = []
         seen_keys = set()
         dim_col = result["dimension"]
-        for r in result.get("top", []):
+        show_only = result.get("show_only")
+        
+        top_list = result.get("top", []) if show_only != "bottom" else []
+        bottom_list = result.get("bottom", []) if show_only != "top" else []
+        
+        for r in top_list:
             key = r[dim_col]
             if key not in seen_keys:
                 combined_ranking.append(r)
                 seen_keys.add(key)
-        for r in result.get("bottom", []):
+        for r in bottom_list:
             key = r[dim_col]
             if key not in seen_keys:
                 combined_ranking.append(r)
                 seen_keys.add(key)
+                
         fake_result = {
             "dimension": dim_col,
             "metric": result["metric"],
@@ -1370,11 +1376,22 @@ def _fallback_response(df, schema, message: str, company_name: str = None) -> di
             except ValueError:
                 pass
 
+        # Check if user only asked for top or bottom specifically
+        show_only = None
+        if any(k in msg for k in ["top", "best", "highest", "most"]):
+            if not any(k in msg for k in ["bottom", "worst", "lowest", "least"]):
+                show_only = "top"
+        elif any(k in msg for k in ["bottom", "worst", "lowest", "least"]):
+            if not any(k in msg for k in ["top", "best", "highest", "most"]):
+                show_only = "bottom"
+
         args = {"dimension": dimension, "metric": metric, "year": year, "n": n}
         if filter_col and filter_val:
             args["filter_col"] = filter_col
             args["filter_val"] = filter_val
         result = _execute_tool(df, schema, "top_bottom_performers", args)
+        if "error" not in result:
+            result["show_only"] = show_only
         if "error" in result:
             return {"answer": f"### Performance Ranking Error\n\n- **Error**: {result['error']}", "chart_spec": None, "tools_used": []}
         
