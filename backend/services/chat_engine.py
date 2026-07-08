@@ -636,7 +636,7 @@ def handle_chat(df, schema: dict, message: str, dataset_summary: str, company_na
     # Post-process chart type if user explicitly requested a pie, doughnut, or map chart
     if res.get("chart_spec"):
         msg_lower = message.lower()
-        if any(k in msg_lower for k in ["pie chart", "piechart", "pie-chart", " pie "]) or msg_lower.endswith(" pie"):
+        if any(k in msg_lower for k in ["pie chart", "piechart", "pie-chart", " pie ", "pye chart", "pyechart", "pye-chart", " pye "]) or msg_lower.endswith(" pie") or msg_lower.endswith(" pye"):
             res["chart_spec"]["type"] = "pie"
         elif any(k in msg_lower for k in ["doughnut chart", "doughnutchart", "doughnut-chart", " doughnut "]) or msg_lower.endswith(" doughnut"):
             res["chart_spec"]["type"] = "doughnut"
@@ -1452,12 +1452,12 @@ def _fallback_response(df, schema, message: str, company_name: str = None) -> di
             }
 
     # D. Compare/Distribution/Breakdown
-    elif any(k in msg for k in ["compare", "comparison", "breakdown", "share", "proportion", "distribution", "by", "versus", "vs", "pie", "piechart", "pie-chart", "doughnut", "map", "global", "world", "country", "countries"]):
+    elif any(k in msg for k in ["compare", "comparison", "breakdown", "share", "proportion", "distribution", "by", "versus", "vs", "pie", "piechart", "pie-chart", "pye", "pyechart", "pye-chart", "doughnut", "map", "global", "world", "country", "countries"]):
         if not dimension:
             return {"answer": "### Comparison Warning\n\n- **Missing Dimension**: To compare data, a categorical column is required but none was found.", "chart_spec": None, "tools_used": []}
         
         # User specified or auto-selected Chart.js type based on text
-        if any(k in msg for k in ["pie", "piechart", "pie-chart", "doughnut", "share", "proportion", "breakdown", "distribution"]):
+        if any(k in msg for k in ["pie", "piechart", "pie-chart", "pye", "pyechart", "pye-chart", "doughnut", "share", "proportion", "breakdown", "distribution"]):
             chart_type = "pie"
         elif any(k in msg for k in ["map", "global", "world", "country", "countries", "geochart"]):
             chart_type = "map"
