@@ -722,6 +722,18 @@ def query_dataset(df: pd.DataFrame, schema: dict, code: str) -> dict:
         code = code.strip()
 
         local_vars = {"df": df, "pd": pd, "np": np}
+
+        # Safely mock pandas plotting accessor so any generated LLM code calling .plot() 
+        # returns the data structure itself to be converted into Chart.js format.
+        try:
+            from pandas.plotting import PlotAccessor
+            def _mock_plot_method(self, *args, **kwargs):
+                return self._parent
+            PlotAccessor.__call__ = _mock_plot_method
+            for kind in getattr(PlotAccessor, "_all_kinds", []):
+                setattr(PlotAccessor, kind, _mock_plot_method)
+        except Exception:
+            pass
         
         import io
         import sys
