@@ -28,6 +28,8 @@ class Settings:
     )
 
     # --- LLM ---
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+    GROK_API_KEY = os.getenv("GROK_API_KEY", "").strip()
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()

@@ -29,18 +29,30 @@ logger = get_logger(__name__)
 # Determine LLM provider based on settings
 use_gemini = False
 use_openrouter = False
+use_openai = False
+use_grok = False
 
 # Gather available API keys
 gemini_key = settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY or settings.ANTHROPIC_API_KEY
 anthropic_key = settings.ANTHROPIC_API_KEY
 openrouter_key = settings.ANTHROPIC_API_KEY
+openai_key = settings.OPENAI_API_KEY
+grok_key = settings.GROK_API_KEY
 
 if settings.LLM_MODEL and settings.LLM_MODEL.lower().startswith("gemini"):
     use_gemini = True
+elif settings.LLM_MODEL and (settings.LLM_MODEL.lower().startswith("gpt") or "openai" in settings.LLM_MODEL.lower()):
+    use_openai = True
+elif settings.LLM_MODEL and (settings.LLM_MODEL.lower().startswith("grok") or "xai" in settings.LLM_MODEL.lower()):
+    use_grok = True
 elif gemini_key and (
     gemini_key.startswith("AQ.") or gemini_key.startswith("AIzaSy")
 ):
     use_gemini = True
+elif openai_key and openai_key.startswith("sk-"):
+    use_openai = True
+elif grok_key and grok_key.startswith("xai-"):
+    use_grok = True
 elif anthropic_key and anthropic_key.startswith("sk-or-"):
     use_openrouter = True
 
@@ -185,6 +197,244 @@ def _handle_gemini_chat(df, schema: dict, message: str, dataset_summary: str, co
         return _fallback_response(df, schema, message, company_name=company_name)
 
 
+def _handle_openai_chat(df, schema: dict, message: str, dataset_summary: str, company_name: str = None) -> dict:
+    if not settings.OPENAI_API_KEY:
+        return _fallback_response(df, schema, message, company_name=company_name)
+
+    try:
+        import urllib.request
+        import urllib.error
+        
+        # Map the tools to OpenAI tool format
+        openai_tools = []
+        for tool in TOOLS:
+            openai_tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "parameters": tool["input_schema"]
+                }
+            })
+
+        company_context = f"\nUser Company Name: {company_name}\n" if company_name else ""
+        messages = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": f"Dataset context:\n{dataset_summary}{company_context}\nQuestion: {message}"}
+        ]
+
+        tools_used = []
+        chart_spec = None
+        final_text = ""
+
+        headers = {
+            "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+        }
+
+        url = "https://api.openai.com/v1/chat/completions"
+        model = settings.LLM_MODEL
+        if not model or model == "gpt-5":
+            model = "gpt-4o"
+
+        for _ in range(4):  # cap tool-use loops to avoid runaway calls
+            data = {
+                "model": model,
+                "messages": messages,
+                "tools": openai_tools,
+                "temperature": 0.0
+            }
+            
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(data).encode("utf-8"),
+                headers=headers,
+                method="POST"
+            )
+            
+            try:
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    res_body = json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                err_msg = e.read().decode("utf-8")
+                logger.error(f"OpenAI HTTP Error: {err_msg}")
+                return _fallback_response(df, schema, message, company_name=company_name)
+            except Exception as e:
+                logger.error(f"OpenAI Connection Error: {e}")
+                return _fallback_response(df, schema, message, company_name=company_name)
+
+            choices = res_body.get("choices", [])
+            if not choices:
+                break
+            choice = choices[0]
+            msg_obj = choice.get("message", {})
+            
+            if msg_obj.get("content"):
+                final_text = msg_obj["content"]
+                
+            tool_calls = msg_obj.get("tool_calls", [])
+            if not tool_calls:
+                break
+                
+            assistant_msg = {
+                "role": "assistant",
+                "content": msg_obj.get("content"),
+                "tool_calls": tool_calls
+            }
+            messages.append(assistant_msg)
+            
+            for call in tool_calls:
+                func = call.get("function", {})
+                name = func.get("name")
+                call_id = call.get("id")
+                
+                try:
+                    args = json.loads(func.get("arguments", "{}"))
+                except Exception:
+                    args = {}
+                    
+                tools_used.append(name)
+                result = _execute_tool(df, schema, name, args)
+                
+                if chart_spec is None:
+                    chart_spec = _maybe_chart(name, result)
+                    
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": name,
+                    "content": json.dumps(result)
+                })
+
+        return {
+            "answer": final_text or "I wasn't able to generate an answer from the available data.",
+            "chart_spec": chart_spec,
+            "tools_used": list(set(tools_used)),
+        }
+    except Exception as e:
+        logger.warning(f"OpenAI API call failed: {e}. Falling back to local analytics.")
+        return _fallback_response(df, schema, message, company_name=company_name)
+
+
+def _handle_grok_chat(df, schema: dict, message: str, dataset_summary: str, company_name: str = None) -> dict:
+    if not settings.GROK_API_KEY:
+        return _fallback_response(df, schema, message, company_name=company_name)
+
+    try:
+        import urllib.request
+        import urllib.error
+        
+        # Map the tools to Grok/OpenAI tool format
+        openai_tools = []
+        for tool in TOOLS:
+            openai_tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "parameters": tool["input_schema"]
+                }
+            })
+
+        company_context = f"\nUser Company Name: {company_name}\n" if company_name else ""
+        messages = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": f"Dataset context:\n{dataset_summary}{company_context}\nQuestion: {message}"}
+        ]
+
+        tools_used = []
+        chart_spec = None
+        final_text = ""
+
+        headers = {
+            "Authorization": f"Bearer {settings.GROK_API_KEY}",
+            "Content-Type": "application/json",
+        }
+
+        url = "https://api.x.ai/v1/chat/completions"
+        model = settings.LLM_MODEL
+        if not model or model == "grok":
+            model = "grok-3"  # map grok to grok-3 (since it is the active/valid model ID we confirmed)
+
+        for _ in range(4):  # cap tool-use loops to avoid runaway calls
+            data = {
+                "model": model,
+                "messages": messages,
+                "tools": openai_tools,
+                "temperature": 0.0
+            }
+            
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(data).encode("utf-8"),
+                headers=headers,
+                method="POST"
+            )
+            
+            try:
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    res_body = json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                err_msg = e.read().decode("utf-8")
+                logger.error(f"Grok HTTP Error: {err_msg}")
+                return _fallback_response(df, schema, message, company_name=company_name)
+            except Exception as e:
+                logger.error(f"Grok Connection Error: {e}")
+                return _fallback_response(df, schema, message, company_name=company_name)
+
+            choices = res_body.get("choices", [])
+            if not choices:
+                break
+            choice = choices[0]
+            msg_obj = choice.get("message", {})
+            
+            if msg_obj.get("content"):
+                final_text = msg_obj["content"]
+                
+            tool_calls = msg_obj.get("tool_calls", [])
+            if not tool_calls:
+                break
+                
+            assistant_msg = {
+                "role": "assistant",
+                "content": msg_obj.get("content"),
+                "tool_calls": tool_calls
+            }
+            messages.append(assistant_msg)
+            
+            for call in tool_calls:
+                func = call.get("function", {})
+                name = func.get("name")
+                call_id = call.get("id")
+                
+                try:
+                    args = json.loads(func.get("arguments", "{}"))
+                except Exception:
+                    args = {}
+                    
+                tools_used.append(name)
+                result = _execute_tool(df, schema, name, args)
+                
+                if chart_spec is None:
+                    chart_spec = _maybe_chart(name, result)
+                    
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": name,
+                    "content": json.dumps(result)
+                })
+
+        return {
+            "answer": final_text or "I wasn't able to generate an answer from the available data.",
+            "chart_spec": chart_spec,
+            "tools_used": list(set(tools_used)),
+        }
+    except Exception as e:
+        logger.warning(f"Grok API call failed: {e}. Falling back to local analytics.")
+        return _fallback_response(df, schema, message, company_name=company_name)
+
+
 def _handle_anthropic_chat(df, schema: dict, message: str, dataset_summary: str, company_name: str = None) -> dict:
     if _anthropic_client is None:
         return _fallback_response(df, schema, message, company_name=company_name)
@@ -246,6 +496,10 @@ def _handle_anthropic_chat(df, schema: dict, message: str, dataset_summary: str,
 def handle_chat(df, schema: dict, message: str, dataset_summary: str, company_name: str = None) -> dict:
     if use_gemini:
         res = _handle_gemini_chat(df, schema, message, dataset_summary, company_name=company_name)
+    elif use_openai:
+        res = _handle_openai_chat(df, schema, message, dataset_summary, company_name=company_name)
+    elif use_grok:
+        res = _handle_grok_chat(df, schema, message, dataset_summary, company_name=company_name)
     elif use_openrouter:
         res = _handle_openrouter_chat(df, schema, message, dataset_summary, company_name=company_name)
     else:
@@ -630,7 +884,7 @@ def _fallback_response(df, schema, message: str, company_name: str = None) -> di
 
     # Resolve metric and dimension
     def find_column(cols, text):
-        stop_words = {"using", "with", "show", "give", "plot", "chart", "make", "find", "list", "get", "view", "display", "metric", "column", "data", "dataset", "table", "file", "please", "me", "our", "my", "pie", "bar", "line", "scatter"}
+        stop_words = {"using", "with", "show", "give", "plot", "chart", "make", "find", "list", "get", "view", "display", "metric", "column", "data", "dataset", "table", "file", "please", "me", "our", "my", "pie", "bar", "line", "scatter", "selling", "sell", "sold"}
         # First, try to find a column name that is present in the text (exact or clean)
         for col in cols:
             col_clean = col.lower().replace("_", " ").replace("-", " ")
@@ -714,6 +968,62 @@ def _fallback_response(df, schema, message: str, company_name: str = None) -> di
             continue
         if filter_col:
             break
+
+    # 0.0. General Summary / Dashboard / Executive Report Check
+    if any(k in msg for k in ["summary", "summariz", "dashboard", "report", "kpi", "metric", "matrice", "matrix"]):
+        from services import report_engine
+        from services import pandas_processor as pp
+        
+        kpis = pp.compute_kpis(df, schema)
+        report = report_engine.build_executive_report(df, schema)
+        
+        # Build a beautiful executive summary list of KPIs
+        kpi_lines = []
+        kpi_lines.append(f"- **Total Rows**: {kpis.get('row_count', len(df)):,}")
+        
+        for k, v in kpis.items():
+            if k == "row_count":
+                continue
+            name = k.replace("_", " ").title()
+            if "total" in k:
+                kpi_lines.append(f"- **{name}**: {v:,.2f}")
+            elif "avg" in k:
+                kpi_lines.append(f"- **{name}**: {v:,.2f}")
+            else:
+                kpi_lines.append(f"- **{name}**: {v}")
+                
+        # Also summarize other numeric columns not captured in predefined KPIs
+        captured_cols = []
+        for candidates in [["revenue", "sales", "amount", "total"], ["profit", "margin"], ["order", "quantity", "units"]]:
+            numeric_cols = [c for c, t in schema.items() if t == "numeric"]
+            col = pp._match_column(numeric_cols, candidates)
+            if col:
+                captured_cols.append(col)
+                
+        other_numerics = [c for c, t in schema.items() if t == "numeric" and c not in captured_cols]
+        for col in other_numerics:
+            col_sum = float(df[col].sum())
+            col_avg = float(df[col].mean())
+            kpi_lines.append(f"- **Total {col}**: {col_sum:,.2f}")
+            kpi_lines.append(f"- **Average {col}**: {col_avg:,.2f}")
+
+        kpis_str = "\n".join(kpi_lines)
+        
+        answer = (
+            f"### Executive Summary & Dashboard Metrics\n\n"
+            f"Here is a summary of the key metrics in your dataset:\n\n"
+            f"{kpis_str}\n\n"
+            f"#### Key Business Insights\n"
+            + "\n".join([f"- {insight}" for insight in report.get("key_insights", [])]) + "\n\n"
+            f"#### Business Health: **{report.get('business_health', 'Stable')}**\n"
+            f"- {report.get('summary', '')}"
+        )
+        
+        return {
+            "answer": answer,
+            "chart_spec": None,
+            "tools_used": []
+        }
 
     # 0. Rival Company / Competition Check
     if any(k in msg for k in ["stay tuned", "survive", "competition", "competitor", "competitors", "rival", "rivals"]):
@@ -959,7 +1269,7 @@ def _fallback_response(df, schema, message: str, company_name: str = None) -> di
             "tools_used": ["top_bottom_performers"]
         }
     # AA. Aggregation (Sum, Average, Total, Count)
-    elif any(k in msg for k in ["sum", "total", "average", "avg", "mean", "collected", "how many", "how much", "earned", "gained"]):
+    elif any(f" {k} " in f" {msg} " for k in ["sum", "total", "average", "avg", "mean", "collected", "earned", "gained"]) or any(k in msg for k in ["how many", "how much"]):
         # Check if this is actually a comparison breakdown (e.g., "by region", "versus")
         is_breakdown = any(k in msg for k in ["compare", "comparison", "breakdown", "share", "proportion", "distribution", "by", "versus", "vs"])
         if not is_breakdown:
@@ -1052,7 +1362,34 @@ def _fallback_response(df, schema, message: str, company_name: str = None) -> di
             "tools_used": ["compare_dimension"]
         }
 
-    # E. Trend (Default fallback if nothing else matched)
+    # E. Compare Dimension (If dimension is identified and not handled by other specific intents)
+    elif dimension:
+        chart_type = "pie" if any(k in msg for k in ["pie", "doughnut", "share", "proportion", "breakdown"]) else "bar"
+        args = {"dimension": dimension, "metric": metric, "chart_type": chart_type, "year": year}
+        if filter_col and filter_val:
+            args["filter_col"] = filter_col
+            args["filter_val"] = filter_val
+        result = _execute_tool(df, schema, "compare_dimension", args)
+        if "error" not in result:
+            best = result["best"]
+            worst = result["worst"]
+            best_share = best.get('share_pct', 0)
+            worst_share = worst.get('share_pct', 0)
+            filter_text = f" for **{filter_val}** ({filter_col})" if filter_val else ""
+            year_text = f" in **{year}**" if year else ""
+            answer = (
+                f"### Breakdown of **{metric}** by **{dimension}**{filter_text}{year_text}\n\n"
+                f"- **Top Performer**: **{best[result['dimension']]}** (generating **{best[result['metric']]:,.2f}**, representing **{best_share}%** share)\n"
+                f"- **Lowest Performer**: **{worst[result['dimension']]}** (generating **{worst[result['metric']]:,.2f}**, representing **{worst_share}%** share)"
+            )
+            chart_spec = ve.comparison_to_chart(result, chart_type=chart_type)
+            return {
+                "answer": answer,
+                "chart_spec": chart_spec,
+                "tools_used": ["compare_dimension"]
+            }
+
+    # F. Trend (Default fallback if nothing else matched)
     else:
         args = {"metric": metric, "year": year}
         if filter_col and filter_val:
