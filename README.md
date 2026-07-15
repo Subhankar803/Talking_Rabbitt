@@ -1,4 +1,4 @@
-# Talking Rabbitt — AI-Powered Business Intelligence Dashboard!
+# Talking Rabbitt — AI-Powered Business Intelligence Dashboard
 
 An AI-powered "talking dashboard" that ingests business spreadsheets, automatically
 analyzes them, and lets users converse with the data in natural language — by text
